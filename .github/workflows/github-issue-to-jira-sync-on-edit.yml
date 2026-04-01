@@ -1,0 +1,133 @@
+name: Github 이슈 수정 시 Jira Task 자동 갱신
+
+on:
+  issues:
+    types: [edited, assigned, unassigned]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  update-jira-task:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      # 1) 이슈 본문에서 epic/start/due 추출
+      - name: Jira 필드 정보 추출
+        id: extract_info
+        run: |
+          BODY='${{ github.event.issue.body }}'
+          echo "EPIC_KEY=$(echo "$BODY" | grep -oE 'epic: [A-Z]+-[0-9]+' | awk '{print $2}')" >> $GITHUB_ENV
+          echo "START_DATE=$(echo "$BODY" | grep -oE 'start: [0-9]{4}-[0-9]{2}-[0-9]{2}' | awk '{print $2}')" >> $GITHUB_ENV
+          echo "DUE_DATE=$(echo "$BODY" | grep -oE 'due: [0-9]{4}-[0-9]{2}-[0-9]{2}' | awk '{print $2}')" >> $GITHUB_ENV
+
+      # 2) 우리가 남긴 Jira 생성 코멘트에서 Jira Key 추출 (안전)
+      - name: Github 이슈 코멘트에서 Jira 키 추출
+        id: extract_jira_key
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comments = await github.rest.issues.listComments({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+
+            // "Jira 이슈가 생성되었습니다" 코멘트에서만 키 추출
+            const regex = /Jira 이슈가 생성되었습니다:[^[]*\[([A-Z]+-\d+)\]/;
+            let jiraKey = null;
+
+            for (const c of comments.data.reverse()) {
+              const m = regex.exec(c.body || "");
+              if (m) { jiraKey = m[1]; break; }
+            }
+
+            if (!jiraKey) {
+              core.setOutput("jiraKey", "");
+              return;
+            }
+
+            core.setOutput("jiraKey", jiraKey);
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 3) GitHub assignee -> Jira accountId 매핑(선택)
+      - name: Resolve assignee (GitHub login -> Jira accountId)
+        id: resolve_assignee
+        run: |
+          if [ ! -f ".github/jira-users.json" ]; then
+            echo "ASSIGNEE_ID=" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          ASSIGNEES=$(jq -r '.issue.assignees[].login // empty' <<< '${{ toJson(github.event) }}')
+          SELECTED_ID=""
+          for GH in $ASSIGNEES; do
+            JIRA_ID=$(jq -r --arg k "$GH" '.[$k] // empty' .github/jira-users.json)
+            if [ -n "$JIRA_ID" ]; then SELECTED_ID="$JIRA_ID"; break; fi
+          done
+
+          echo "ASSIGNEE_ID=$SELECTED_ID" >> $GITHUB_ENV
+
+      # 4) Jira 이슈 업데이트 (Team-managed: parent.key 사용)
+      - name: Jira Task 필드 수정 (에픽/일정/제목/본문/담당자)
+        if: steps.extract_jira_key.outputs.jiraKey != ''
+        env:
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_ISSUE_KEY: ${{ steps.extract_jira_key.outputs.jiraKey }}
+          EPIC_KEY: ${{ env.EPIC_KEY }}
+          START_DATE: ${{ env.START_DATE }}
+          DUE_DATE: ${{ env.DUE_DATE }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_USER: ${{ github.event.issue.user.login }}
+          ASSIGNEE_ID: ${{ env.ASSIGNEE_ID }}
+        run: |
+          JSON=$(jq -n \
+            --arg summary "$ISSUE_TITLE" \
+            --arg description "GitHub Issue: [$ISSUE_TITLE]($ISSUE_URL)\n작성자: $ISSUE_USER\n본문:\n$ISSUE_BODY" \
+            --arg epic "$EPIC_KEY" \
+            --arg start "$START_DATE" \
+            --arg due "$DUE_DATE" \
+            --arg assigneeId "$ASSIGNEE_ID" \
+            '{
+              fields: {
+                summary: $summary,
+                description: $description,
+                customfield_10015: $start,
+                duedate: $due
+              }
+            }
+            | if $epic != "" then .fields.parent = { key: $epic } else . end
+            | if $assigneeId != "" then .fields.assignee = { id: $assigneeId } else . end
+            | .fields |= with_entries(select(.value != ""))'
+          )
+
+          curl -sS -X PUT \
+            -u "${JIRA_USER_EMAIL}:${JIRA_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json" \
+            --url "${JIRA_BASE_URL}/rest/api/3/issue/${JIRA_ISSUE_KEY}" \
+            -d "$JSON"
+
+      - name: Github 이슈에 수정 결과 안내 코멘트
+        if: steps.extract_jira_key.outputs.jiraKey != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `♻️ **Jira Task 정보가 업데이트 되었습니다.**`
+            })

@@ -1,0 +1,61 @@
+name: PR Policy (Jira + Branch Naming)
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches:
+      - develop
+      - main
+
+permissions:
+  pull-requests: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title contains Jira key (e.g., SY2026-17)
+        shell: bash
+        run: |
+          TITLE="${{ github.event.pull_request.title }}"
+          echo "PR Title: $TITLE"
+          echo "$TITLE" | grep -Eiq '\bSY2026-[0-9]+\b' || {
+            echo "ERROR: PR title must include a Jira key like 'SY2026-17'."
+            exit 1
+          }
+
+      - name: Validate source branch naming convention
+        shell: bash
+        run: |
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          echo "Source Branch: $BRANCH"
+
+          # Allowed patterns:
+          # feature/SY2026-17-something
+          # bugfix/SY2026-17-something
+          # hotfix/SY2026-17-something
+          # research/SY2026-17-something
+          # docs/SY2026-17-something
+          # refactor/SY2026-17-something
+          # release/v0.3.0
+          echo "$BRANCH" | grep -Eiq '^(feature|bugfix|hotfix|research|docs|refactor)/SY2026-[0-9]+[-/].+$|^release\/v[0-9]+\.[0-9]+\.[0-9]+$' || {
+            echo "ERROR: Branch name must match one of:"
+            echo "  feature/SY2026-17-..."
+            echo "  bugfix/SY2026-17-..."
+            echo "  hotfix/SY2026-17-..."
+            echo "  research/SY2026-17-..."
+            echo "  docs/SY2026-17-..."
+            echo "  refactor/SY2026-17-..."
+            echo "  release/v0.3.0"
+            exit 1
+          }
+
+      - name: Validate PR base branch
+        shell: bash
+        run: |
+          BASE="${{ github.event.pull_request.base.ref }}"
+          echo "Base Branch: $BASE"
+          if [[ "$BASE" != "develop" && "$BASE" != "main" ]]; then
+            echo "ERROR: PR base must be develop or main."
+            exit 1
+          fi
