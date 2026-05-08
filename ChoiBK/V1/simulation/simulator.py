@@ -27,6 +27,7 @@ def run_episode(
     policy:        Callable,
     verbose:       bool = True,
     output_path:   Optional[str] = None,
+    max_clock:     Optional[float] = None,
 ) -> List[dict]:
     """
     에피소드 전체 시뮬레이션.
@@ -55,6 +56,20 @@ def run_episode(
     step_lines: List[str] = []
 
     for step_num in range(MAX_SIM_STEPS):
+        # 시간 제한 종료
+        if max_clock is not None and s.clock >= max_clock:
+            end_lines = [
+                f"\n[Step {step_num}] 시간 제한 도달 ({s.clock:.1f}분 ≥ {max_clock:.0f}분)",
+                f"  완료 job: {sorted(s.Q_done)}",
+                f"  미완료 job: {sorted(s.Q_rem)}",
+                f"  최종 clock: {s.clock:.1f}분",
+            ]
+            if verbose:
+                for line in end_lines:
+                    print(line)
+            step_lines.extend(end_lines)
+            break
+
         if s.is_terminal():
             end_lines = [
                 f"\n[Step {step_num}] 에피소드 종료",
@@ -205,7 +220,6 @@ def _save_result(
     t_cost:       float,
 ) -> None:
     """
-    시뮬레이션 결과를 마크다운(.md) 또는 텍스트(.txt) 파일로 저장한다.
 
     파일 구성:
       1. 메타 정보 (실행 시각, 정책, Job 목록)
@@ -220,6 +234,7 @@ def _save_result(
     lines: List[str] = []
 
     def h1(text):  return f"# {text}" if is_md else f"\n{'=' * 60}\n{text}\n{'=' * 60}"
+    def h2(text):  return f"## {text}" if is_md else f"\n{'-' * 40}\n{text}\n{'-' * 40}"
     def h3(text):  return f"### {text}" if is_md else f"\n[{text}]"
     def bold(text): return f"**{text}**" if is_md else text
     def code(text): return f"`{text}`" if is_md else text

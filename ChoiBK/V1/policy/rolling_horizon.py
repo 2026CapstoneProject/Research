@@ -15,7 +15,7 @@ from typing import Dict, Optional, Tuple
 from data.loader import WIPData, JobData
 from data.params import DEFAULT_HORIZON, DEFAULT_TIME_LIM, STACK_TO_NODE
 from env.state import State, MachinePhase
-from env.actions import Action, CRANE_WAIT
+from env.actions import Action, CRANE_WAIT, PROD_DIRECT_START, PROD_START
 from env.feasibility import get_feasible_actions
 from didp.model_builder import (
     build_didp_model, extract_first_action, compute_relevant_wip_ids,
@@ -96,14 +96,25 @@ def rolling_horizon_policy(
         action = greedy_policy(state, wip_data, job_data)
         return action, result.cost
 
-    # RH가 WAIT을 고르더라도, greedy가 더 진전되는 marshalling/load를 제안하면 그쪽을 사용한다.
+    # RH가 WAIT을 고르더라도, greedy가 더 진전되는 행동을 제안하면 그쪽을 사용한다.
+    # "진전성" 정의:
+    #   - crane.type != CRANE_WAIT (실제 크레인 이동)
+    #   - 또는 prod.type in {DIRECT_START, START_PROCESS} (생산 시작)
+    #     → DIRECT_START는 crane=WAIT이지만 설비를 가동시키므로 진전성 있음
     greedy_action = greedy_policy(state, wip_data, job_data)
+
+    def _is_productive(a: Action) -> bool:
+        return (
+            a.crane.type != CRANE_WAIT
+            or a.prod.type in (PROD_DIRECT_START, PROD_START)
+        )
+
     if action.crane.type == CRANE_WAIT:
         if state.phase == MachinePhase.BUSY and greedy_action.crane.type != CRANE_WAIT:
             if verbose:
                 print(f"  [RH] WAIT 대신 진행성 있는 greedy 행동 사용 → {greedy_action}")
             return greedy_action, result.cost
-        if state.phase == MachinePhase.EMPTY and greedy_action.crane.type != CRANE_WAIT:
+        if state.phase == MachinePhase.EMPTY and _is_productive(greedy_action):
             if verbose:
                 print(f"  [RH] EMPTY WAIT 대신 greedy 행동 사용 → {greedy_action}")
             return greedy_action, result.cost

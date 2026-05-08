@@ -25,7 +25,7 @@ from typing import Dict, List
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from data.loader import load_all, WIPData, JobData
-from data.params import DEFAULT_HORIZON, DEFAULT_TIME_LIM, SIGMA_PTIME
+from data.params import DEFAULT_HORIZON, DEFAULT_TIME_LIM, SIGMA_PTIME, UNM_END
 from env.state import build_initial_state
 from env.transition import set_stochastic
 from policy.greedy import greedy_policy
@@ -170,6 +170,15 @@ def parse_args():
         help="결과 파일 저장 비활성화 (기본값: 자동 저장)"
     )
     parser.add_argument(
+        "--days", type=float, default=None,
+        help=(
+            f"시뮬레이션 시간 제한 (일 수). "
+            f"1일 = {UNM_END:.0f}분 (유인 {int(UNM_END - 120)}분 + 무인 120분). "
+            f"예: --days 5  →  최대 {5 * UNM_END:.0f}분까지 실행. "
+            f"기본값: 제한 없음 (모든 Job 완료 시 종료)"
+        ),
+    )
+    parser.add_argument(
         "--stochastic", action="store_true",
         help=(
             f"확률적 생산시간 활성화: N(0, SIGMA_PTIME) 노이즈 추가 "
@@ -294,6 +303,12 @@ def main():
             )
             output_path = os.path.join(results_dir, f"result_{ts}_{policy_tag}_{run_tag}.md")
 
+    # 시간 제한 계산
+    max_clock = None
+    if getattr(args, "days", None) is not None:
+        max_clock = args.days * UNM_END
+        print(f"\n시간 제한: {args.days}일 = {max_clock:.0f}분")
+
     # 시뮬레이션 실행
     print("\n" + "" * 60)
     log = run_episode(
@@ -305,6 +320,7 @@ def main():
         policy        = policy_fn,
         verbose       = True,
         output_path   = output_path,
+        max_clock     = max_clock,
     )
 
     # 결과 출력
