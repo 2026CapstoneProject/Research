@@ -3,12 +3,12 @@ V5 Phase3 솔버 비교 실험
 experiments/compare_solvers.py
 
 동일한 시나리오에 대해 greedy / CABS / CAASDy 정책을 각각 실행하고
-누적 비용, 완료 run 수, 실행시간, 주요 액션 카운트를 비교 테이블로 출력한다.
+누적 비용, 완료 job 수, 실행시간, 주요 액션 카운트를 비교 테이블로 출력한다.
 
 사용법:
   cd Algorithm/V5/Phase3
   python experiments/compare_solvers.py
-  python experiments/compare_solvers.py --run-ids 3 35 26
+  python experiments/compare_solvers.py --job-ids 3 35 26
   python experiments/compare_solvers.py --horizon 15 --time-limit 5.0
   python experiments/compare_solvers.py --output experiments/compare_result.md
 """
@@ -24,7 +24,7 @@ from typing import Dict, List, Optional
 _PHASE3_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PHASE3_ROOT)
 
-from data.loader import load_all, WIPData, RunData
+from data.loader import load_all, WIPData, JobData
 from data.params import DEFAULT_HORIZON, DEFAULT_TIME_LIM
 from env.state import build_initial_state
 from env.cost import episode_summary
@@ -41,10 +41,10 @@ DATA_DIR = os.path.join(_PHASE3_ROOT, "..", "..", "V1", "input_data_v2")
 
 def _select_accessible_runs(
     wip_data: Dict[int, WIPData],
-    run_data: Dict[int, RunData],
+    job_data: Dict[int, JobData],
     depth: int = 3,
-) -> Dict[int, RunData]:
-    """상단 depth층 안에 있는 run input WIP만 포함"""
+) -> Dict[int, JobData]:
+    """상단 depth층 안에 있는 job input WIP만 포함"""
     stacks: Dict[int, List] = {1: [], 2: [], 3: [], 4: []}
     for wip in wip_data.values():
         stacks[wip.stack_id].append((wip.level, wip.wip_id))
@@ -52,7 +52,7 @@ def _select_accessible_runs(
         stacks[sid].sort(key=lambda x: x[0])
         stacks[sid] = [wid for (_, wid) in stacks[sid]]
 
-    wip_to_run = {r.input_wip_id: rid for rid, r in run_data.items()}
+    wip_to_run = {r.input_wip_id: jid for jid, r in job_data.items()}
     selected = {}
     for stack in stacks.values():
         for i in range(1, depth + 1):
@@ -60,8 +60,8 @@ def _select_accessible_runs(
                 break
             wid = stack[-i]
             if wid in wip_to_run:
-                rid = wip_to_run[wid]
-                selected[rid] = run_data[rid]
+                jid = wip_to_run[wid]
+                selected[jid] = job_data[jid]
     return selected
 
 
@@ -69,7 +69,7 @@ def run_single(
     policy_name: str,
     initial_state,
     wip_data:     Dict[int, WIPData],
-    run_data:     Dict[int, RunData],
+    job_data:     Dict[int, JobData],
     inter_times:  Dict,
     machine_times: Dict,
     horizon:      int,
@@ -80,13 +80,13 @@ def run_single(
     단일 정책 실행 → 결과 dict 반환
     """
     if policy_name == "greedy":
-        def policy_fn(state, wip_data, run_data, machine_times):
-            return greedy_policy(state, wip_data, run_data), 0.0
+        def policy_fn(state, wip_data, job_data, machine_times):
+            return greedy_policy(state, wip_data, job_data), 0.0
     elif policy_name in ("CABS", "CAASDy", "DFBB"):
         sn = policy_name
-        def policy_fn(state, wip_data, run_data, machine_times):
+        def policy_fn(state, wip_data, job_data, machine_times):
             return rolling_horizon_policy(
-                state, wip_data, run_data, machine_times,
+                state, wip_data, job_data, machine_times,
                 horizon=horizon, time_limit=time_limit,
                 solver_name=sn, verbose=False,
             )
@@ -97,7 +97,7 @@ def run_single(
     log = run_episode(
         initial_state=initial_state,
         wip_data=wip_data,
-        run_data=run_data,
+        job_data=job_data,
         inter_times=inter_times,
         machine_times=machine_times,
         policy=policy_fn,
@@ -106,12 +106,12 @@ def run_single(
     )
     elapsed = time.perf_counter() - t0
 
-    summary = episode_summary(log, run_data=run_data)
+    summary = episode_summary(log, job_data=job_data)
     return {
         "policy":          policy_name,
         "total_cost":      summary["total_cost"],
-        "runs_done":       summary["runs_done"],
-        "runs_remain":     summary["runs_remain"],
+        "jobs_done":       summary["jobs_done"],
+        "jobs_remain":     summary["jobs_remain"],
         "clock_end":       summary["clock_end"],
         "n_pickings":         summary["n_pickings"],
         "n_starts":        summary["n_starts"],
@@ -130,8 +130,8 @@ def _fmt_table_md(rows: List[dict]) -> str:
     cols = [
         ("정책",           "policy",          "<"),
         ("총 비용",         "total_cost",      ">"),
-        ("완료 run",        "runs_done",       ">"),
-        ("미완료 run",      "runs_remain",     ">"),
+        ("완료 job",        "jobs_done",       ">"),
+        ("미완료 job",      "jobs_remain",     ">"),
         ("종료 시각(분)",    "clock_end",       ">"),
         ("PICKING",           "n_pickings",         ">"),
         ("MOVE",           "n_moves",         ">"),
@@ -167,8 +167,8 @@ def _fmt_table_txt(rows: List[dict]) -> str:
     col_specs = [
         ("정책",       "policy",          15),
         ("총비용",     "total_cost",       9),
-        ("완료",       "runs_done",        5),
-        ("미완료",     "runs_remain",      5),
+        ("완료",       "jobs_done",        5),
+        ("미완료",     "jobs_remain",      5),
         ("종료(분)",   "clock_end",        9),
         ("PICKING",      "n_pickings",           5),
         ("MOVE",      "n_moves",           5),
@@ -198,7 +198,7 @@ def _fmt_table_txt(rows: List[dict]) -> str:
 def save_comparison(
     output_path: str,
     rows: List[dict],
-    run_data: Dict[int, RunData],
+    job_data: Dict[int, JobData],
     horizon: int,
     time_limit: float,
 ) -> None:
@@ -212,7 +212,7 @@ def save_comparison(
             "# 솔버 비교 실험 결과",
             "",
             f"- 실행 시각: {now}",
-            f"- Run 목록:  {sorted(run_data.keys())}",
+            f"- Job 목록:  {sorted(job_data.keys())}",
             f"- Horizon:   {horizon}",
             f"- Time limit: {time_limit}초 (RH 정책)",
             "",
@@ -223,7 +223,7 @@ def save_comparison(
             "## 해석 가이드",
             "",
             "- **총 비용**: 낮을수록 우수 (step cost 합산 + terminal penalty)",
-            "- **완료 run**: 많을수록 우수",
+            "- **완료 job**: 많을수록 우수",
             "- **종료 시각**: 낮을수록 우수 (더 빠른 처리)",
             "- **실행시간**: greedy는 O(1), RH는 DIDPPy 솔버 시간 포함",
         ]
@@ -232,7 +232,7 @@ def save_comparison(
             "솔버 비교 실험 결과",
             "=" * 60,
             f"실행 시각: {now}",
-            f"Run 목록:  {sorted(run_data.keys())}",
+            f"Job 목록:  {sorted(job_data.keys())}",
             f"Horizon={horizon}, Time limit={time_limit}초",
             "=" * 60,
             "",
@@ -246,7 +246,7 @@ def save_comparison(
 
 def parse_args():
     p = argparse.ArgumentParser(description="V5 Phase3 솔버 비교 실험")
-    p.add_argument("--run-ids", type=int, nargs="+", default=None)
+    p.add_argument("--job-ids", type=int, nargs="+", default=None)
     p.add_argument("--depth",   type=int, default=3)
     p.add_argument("--horizon", type=int, default=DEFAULT_HORIZON)
     p.add_argument("--time-limit", type=float, default=DEFAULT_TIME_LIM)
@@ -268,16 +268,16 @@ def main():
 
     # ── 데이터 로드 ──────────────────────────────────────────────
     print(f"데이터 로드 중: {os.path.abspath(DATA_DIR)}")
-    wip_data, run_data, inter_times, machine_times = load_all(DATA_DIR)
+    wip_data, job_data, inter_times, machine_times = load_all(DATA_DIR)
 
-    if args.run_ids:
-        run_data = {rid: run_data[rid] for rid in args.run_ids if rid in run_data}
+    if args.job_ids:
+        job_data = {jid: job_data[jid] for jid in args.job_ids if jid in job_data}
     else:
-        run_data = _select_accessible_runs(wip_data, run_data, depth=args.depth)
+        job_data = _select_accessible_runs(wip_data, job_data, depth=args.depth)
 
-    print(f"Run 목록: {sorted(run_data.keys())}")
+    print(f"Job 목록: {sorted(job_data.keys())}")
 
-    if not run_data:
+    if not job_data:
         print("사용 가능한 run이 없습니다.")
         return
 
@@ -302,17 +302,17 @@ def main():
     results = []
     for policy_name in policies:
         print(f"\n[{policy_name}] 실행 중...", end=" ", flush=True)
-        initial_state = build_initial_state(wip_data, run_data, buffer_cap=3)
+        initial_state = build_initial_state(wip_data, job_data, buffer_cap=3)
         try:
             result = run_single(
                 policy_name, initial_state,
-                wip_data, run_data, inter_times, machine_times,
+                wip_data, job_data, inter_times, machine_times,
                 horizon=args.horizon, time_limit=args.time_limit,
             )
             results.append(result)
             print(
                 f"완료 | cost={result['total_cost']:.1f} | "
-                f"runs={result['runs_done']}/{result['runs_done']+result['runs_remain']} | "
+                f"jobs={result['jobs_done']}/{result['jobs_done']+result['jobs_remain']} | "
                 f"{result['elapsed_sec']:.2f}초"
             )
         except Exception as e:
@@ -340,7 +340,7 @@ def main():
         exp_dir = os.path.join(_PHASE3_ROOT, "experiments")
         output_path = os.path.join(exp_dir, f"compare_{ts}.md")
 
-    save_comparison(output_path, results, run_data, args.horizon, args.time_limit)
+    save_comparison(output_path, results, job_data, args.horizon, args.time_limit)
     print(f"\n결과 저장 완료: {output_path}")
 
 

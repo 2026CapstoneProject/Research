@@ -11,9 +11,9 @@ Phase 5 핵심 가정:
   python main.py                         # greedy + 전체 production_plan 사용
   python main.py --policy rh             # Rolling Horizon DLA (DIDPPy 필요)
   python main.py --horizon 10            # horizon 크기 조정
-  python main.py --run-ids 3 35 26       # 특정 run ID 지정
+  python main.py --job-ids 3 35 26       # 특정 job ID 지정
   python main.py --verbose               # 상세 로그
-  python main.py --demo-filter           # accessible run 기반 데모 subset 사용
+  python main.py --demo-filter           # accessible job 기반 데모 subset 사용
   python main.py --buffer-cap 3          # 버퍼 용량 설정 (기본: 3)
   python main.py --no-move               # MOVE/TEMP_MOVE 비활성화 (Phase 1 모드)
 """
@@ -27,7 +27,7 @@ from typing import Dict, List
 # 현재 디렉토리를 import 경로에 추가
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from data.loader import load_all, WIPData, RunData
+from data.loader import load_all, WIPData, JobData
 from data.params import DEFAULT_HORIZON, DEFAULT_TIME_LIM, SIGMA_PTIME
 from env.state import build_initial_state
 from env.transition import set_stochastic
@@ -46,18 +46,18 @@ DATA_DIR = os.path.join(
 
 def select_accessible_runs(
     wip_data: Dict[int, WIPData],
-    run_data:  Dict[int, RunData],
+    job_data:  Dict[int, JobData],
     depth: int = 5,
-) -> Dict[int, RunData]:
+) -> Dict[int, JobData]:
     """
-    Phase 5 demo용 run 후보를 선택한다.
+    Phase 5 demo용 job 후보를 선택한다.
 
     규칙:
-      - 각 스택의 상단 depth층 안에 있는 run input WIP는 모두 포함한다.
+      - 각 스택의 상단 depth층 안에 있는 job input WIP는 모두 포함한다.
       - input_wip_id == 0 인 generic run은 top depth 내 WIP 중
-        run template과 맞는 것이 하나라도 있으면 후보에 포함한다.
+        job template과 맞는 것이 하나라도 있으면 후보에 포함한다.
     Returns:
-        상단 depth층 기준의 run_data 부분집합
+        상단 depth층 기준의 job_data 부분집합
     """
     # 스택별 WIP 리스트 구성 (level 오름차순 = index 0이 바닥)
     stacks: Dict[int, List[int]] = {1: [], 2: [], 3: [], 4: []}
@@ -69,14 +69,14 @@ def select_accessible_runs(
         stacks[sid].sort(key=lambda x: x[0])
         stacks[sid] = [wid for (_, wid) in stacks[sid]]
 
-    selected: Dict[int, RunData] = {}
+    selected: Dict[int, JobData] = {}
     wip_to_runs: Dict[int, List[int]] = {}
-    generic_runs: List[RunData] = []
-    for rid, run in run_data.items():
-        if run.input_wip_id > 0:
-            wip_to_runs.setdefault(run.input_wip_id, []).append(rid)
+    generic_jobs: List[JobData] = []
+    for jid, job in job_data.items():
+        if job.input_wip_id > 0:
+            wip_to_runs.setdefault(job.input_wip_id, []).append(jid)
         else:
-            generic_runs.append(run)
+            generic_jobs.append(job)
 
     top_depth_wips: List[int] = []
 
@@ -86,16 +86,16 @@ def select_accessible_runs(
                 break
             wid = stack[-i]
             top_depth_wips.append(wid)
-            for rid in wip_to_runs.get(wid, []):
-                selected[rid] = run_data[rid]
+            for jid in wip_to_runs.get(wid, []):
+                selected[jid] = job_data[jid]
 
-    # generic run(input_wip_id == 0): top-depth WIP template별로 대표 run만 선택
-    generic_candidates: Dict[tuple, List[RunData]] = {}
-    for run in generic_runs:
+    # generic job(input_wip_id == 0): top-depth WIP template별로 대표 run만 선택
+    generic_candidates: Dict[tuple, List[JobData]] = {}
+    for job in generic_jobs:
         generic_candidates.setdefault(
-            (run.grade, run.thickness, run.short_side, run.long_side),
+            (job.grade, job.thickness, job.short_side, job.long_side),
             [],
-        ).append(run)
+        ).append(job)
 
     matched_templates = set()
     for wid in top_depth_wips:
@@ -107,7 +107,7 @@ def select_accessible_runs(
             continue
         # 같은 template의 generic run이 여러 개면 process_time이 가장 짧은 대표만 선택
         best_run = min(generic_candidates[key], key=lambda r: r.process_time)
-        selected[best_run.run_id] = best_run
+        selected[best_run.job_id] = best_run
         matched_templates.add(key)
 
     return selected
@@ -128,16 +128,16 @@ def parse_args():
         help=f"DIDPPy 솔버 제한 시간(초) (기본: {DEFAULT_TIME_LIM})"
     )
     parser.add_argument(
-        "--run-ids", type=int, nargs="+", default=None,
-        help="사용할 Run ID 직접 지정 (예: --run-ids 3 35 26)"
+        "--job-ids", type=int, nargs="+", default=None,
+        help="사용할 Job ID 직접 지정 (예: --job-ids 3 35 26)"
     )
     parser.add_argument(
         "--depth", type=int, default=3,
-        help="accessible run 탐색 depth (기본: 3층)"
+        help="accessible job 탐색 depth (기본: 3층)"
     )
     parser.add_argument(
         "--demo-filter", action="store_true",
-        help="accessible run 기반 데모 subset만 사용 (기본값은 전체 production_plan)"
+        help="accessible job 기반 데모 subset만 사용 (기본값은 전체 production_plan)"
     )
     parser.add_argument(
         "--no-filter", action="store_true",
@@ -187,37 +187,37 @@ def main():
 
     # ── 데이터 로드 ───────────────────────────────────────────
     print(f"데이터 로드 중: {os.path.abspath(DATA_DIR)}")
-    wip_data, run_data, inter_times, machine_times = load_all(DATA_DIR)
-    print(f"  WIP 수: {len(wip_data)} | Run 수 (전체): {len(run_data)}")
+    wip_data, job_data, inter_times, machine_times = load_all(DATA_DIR)
+    print(f"  WIP 수: {len(wip_data)} | Job 수 (전체): {len(job_data)}")
 
-    # ── Run 선택 ─────────────────────────────────────────────
-    if args.run_ids is not None:
+    # ── Job 선택 ─────────────────────────────────────────────
+    if args.job_ids is not None:
         # 직접 지정
-        run_data = {rid: run_data[rid] for rid in args.run_ids
-                    if rid in run_data}
-        print(f"  지정 Run: {sorted(run_data.keys())}")
+        job_data = {jid: job_data[jid] for jid in args.job_ids
+                    if jid in job_data}
+        print(f"  지정 Job: {sorted(job_data.keys())}")
 
     elif args.demo_filter:
         # accessible WIP 기반 자동 선택
-        run_data = select_accessible_runs(wip_data, run_data, depth=args.depth)
-        print(f"  접근 가능 Run 자동 선택 (depth={args.depth}): "
-              f"{sorted(run_data.keys())}")
+        job_data = select_accessible_runs(wip_data, job_data, depth=args.depth)
+        print(f"  접근 가능 Job 자동 선택 (depth={args.depth}): "
+              f"{sorted(job_data.keys())}")
     else:
         print("  전체 production_plan 사용")
 
-    if not run_data:
+    if not job_data:
         print("사용 가능한 run이 없습니다.")
         return
 
-    # ── Run 정보 출력 ─────────────────────────────────────────
-    print("\n사용할 Run 목록:")
-    for rid, run in sorted(run_data.items()):
-        wip = wip_data.get(run.input_wip_id)
+    # ── Job 정보 출력 ─────────────────────────────────────────
+    print("\n사용할 Job 목록:")
+    for jid, job in sorted(job_data.items()):
+        wip = wip_data.get(job.input_wip_id)
         loc = f"stack={wip.stack_id} lv={wip.level}" if wip else "N/A"
-        print(f"  Run {rid:3d}: WIP {run.input_wip_id:3d} "
-              f"[{loc}] | {run.spec:20s} | "
-              f"ptime={run.process_time:5.1f}분 | "
-              f"C_s={run.cap_short:.0f} C_l={run.cap_long:.0f}")
+        print(f"  Job {jid:3d}: WIP {job.input_wip_id:3d} "
+              f"[{loc}] | {job.spec:20s} | "
+              f"ptime={job.process_time:5.1f}분 | "
+              f"C_s={job.cap_short:.0f} C_l={job.cap_long:.0f}")
 
     # ── 확률적 생산시간 활성화 ───────────────────────────────
     if getattr(args, 'stochastic', False):
@@ -235,20 +235,20 @@ def main():
 
     # ── 초기 상태 생성 ────────────────────────────────────────
     buf_cap = getattr(args, 'buffer_cap', 3)
-    initial_state = build_initial_state(wip_data, run_data, buffer_cap=buf_cap)
+    initial_state = build_initial_state(wip_data, job_data, buffer_cap=buf_cap)
     print(f"  버퍼 용량: {buf_cap} 슬롯")
 
-    print(f"\n초기 야드 상태 (Run 관련 스택 top):")
+    print(f"\n초기 야드 상태 (Job 관련 스택 top):")
     needed_stacks = set()
-    for run in run_data.values():
-        wip = wip_data.get(run.input_wip_id)
+    for job in job_data.values():
+        wip = wip_data.get(job.input_wip_id)
         if wip:
             needed_stacks.add(wip.stack_id)
 
     for sid in sorted(initial_state.stacks.keys()):
         stk = initial_state.stacks[sid]
         top = stk[-1] if stk else "empty"
-        marker = "◀ run 있음" if sid in needed_stacks else ""
+        marker = "◀ job 있음" if sid in needed_stacks else ""
         print(f"  Stack {sid}: {len(stk)}개 WIP | top={top} {marker}")
 
     # ── 정책 설정 ────────────────────────────────────────────
@@ -265,15 +265,15 @@ def main():
     if args.policy == "greedy":
         print("\nGreedy 정책 사용")
 
-        def policy_fn(state, wip_data, run_data, machine_times):
-            return greedy_policy(state, wip_data, run_data), 0.0
+        def policy_fn(state, wip_data, job_data, machine_times):
+            return greedy_policy(state, wip_data, job_data), 0.0
 
     else:  # rh
         h, tl, sn = args.horizon, args.time_limit, args.solver
 
-        def policy_fn(state, wip_data, run_data, machine_times):
+        def policy_fn(state, wip_data, job_data, machine_times):
             return rolling_horizon_policy(
-                state, wip_data, run_data, machine_times,
+                state, wip_data, job_data, machine_times,
                 horizon=h, time_limit=tl, solver_name=sn,
                 verbose=args.verbose,
             )
@@ -290,9 +290,9 @@ def main():
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             policy_tag = args.policy
             run_tag = (
-                "runs" + "_".join(str(r) for r in sorted(run_data.keys()))
-                if len(run_data) <= 6
-                else f"{len(run_data)}runs"
+                "jobs" + "_".join(str(r) for r in sorted(job_data.keys()))
+                if len(job_data) <= 6
+                else f"{len(job_data)}jobs"
             )
             output_path = os.path.join(results_dir, f"result_{ts}_{policy_tag}_{run_tag}.md")
 
@@ -301,7 +301,7 @@ def main():
     log = run_episode(
         initial_state = initial_state,
         wip_data      = wip_data,
-        run_data      = run_data,
+        job_data      = job_data,
         inter_times   = inter_times,
         machine_times = machine_times,
         policy        = policy_fn,
@@ -310,7 +310,7 @@ def main():
     )
 
     # ── 결과 출력 ─────────────────────────────────────────────
-    print_summary(log, run_data=run_data)
+    print_summary(log, job_data=job_data)
 
 
 if __name__ == "__main__":

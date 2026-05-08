@@ -7,7 +7,7 @@ Phase 5 핵심 가정:
      DIRECT_START로 즉시 가공을 시작한다. has_external_input = True (항상).
   2. output_wip_id는 unique WIP로 생성·적재되지만, 다른 run의 input으로 재사용되지 않는다.
      생성된 출력재는 is_output_wip = True로 마킹되어 PICKING 후보에서 제외된다.
-  3. input_wip_id > 0 인 unique run: 초기 inventory에 없는 WIP은 외부 원자재로 본다.
+  3. input_wip_id > 0 인 unique job: 초기 inventory에 없는 WIP은 외부 원자재로 본다.
 """
 
 import os
@@ -38,9 +38,9 @@ class WIPData:
 
 
 @dataclass
-class RunData:
-    """생산 run 한 건의 정보"""
-    run_id: int
+class JobData:
+    """생산 job 한 건의 정보"""
+    job_id: int
     input_wip_id: int
     grade: str
     spec: str
@@ -53,11 +53,11 @@ class RunData:
     long_side: float
     generates_output: bool
     output_wip_id: Optional[int]
-    has_external_input: bool = False  # True = 원자재 run (크레인 PICKING 불필요)
+    has_external_input: bool = False  # True = 원자재 job (크레인 PICKING 불필요)
 
     def __repr__(self):
         return (
-            f"Run(id={self.run_id}, in={self.input_wip_id}, out={self.output_wip_id}, "
+            f"Job(id={self.job_id}, in={self.input_wip_id}, out={self.output_wip_id}, "
             f"batch={self.batch_count}, spec={self.spec})"
         )
 
@@ -79,7 +79,7 @@ def _load_inventory(inv_path: str) -> pd.DataFrame:
 def _load_production_plan(plan_path: str) -> pd.DataFrame:
     df = pd.read_csv(plan_path, encoding="cp949")
     df.columns = [
-        "run_id", "date", "use_machine", "batch_count",
+        "job_id", "date", "use_machine", "batch_count",
         "input_wip_id", "grade", "spec", "quantity",
         "est_hours", "process_time_min",
         "generates_output", "output_wip_id",
@@ -116,7 +116,7 @@ def _load_crane_times(crane_path: str) -> Tuple[Dict, Dict]:
 
 def load_all(data_dir: str) -> Tuple[
     Dict[int, WIPData],
-    Dict[int, RunData],
+    Dict[int, JobData],
     Dict[Tuple[str, str], float],
     Dict[str, float],
 ]:
@@ -187,7 +187,7 @@ def load_all(data_dir: str) -> Tuple[
             spec=spec,
         )
 
-    run_data: Dict[int, RunData] = {}
+    job_data: Dict[int, JobData] = {}
     for _, row in plan_df.iterrows():
         if int(row["use_machine"]) == 0:
             continue
@@ -198,8 +198,8 @@ def load_all(data_dir: str) -> Tuple[
         gen_flag = int(row["generates_output"]) if not pd.isna(row["generates_output"]) else 0
         out_wid = None if pd.isna(row["output_wip_id"]) else int(row["output_wip_id"])
 
-        run_data[int(row["run_id"])] = RunData(
-            run_id=int(row["run_id"]),
+        job_data[int(row["job_id"])] = JobData(
+            job_id=int(row["job_id"]),
             input_wip_id=wid,
             grade=str(row["grade"]),
             spec=str(row["spec"]),
@@ -216,30 +216,30 @@ def load_all(data_dir: str) -> Tuple[
 
     # ── has_external_input 결정 ──────────────────────────────────
     # Phase 5 가정:
-    #   - 원자재 run (input_wip_id=0): 항상 외부 공급 → has_external_input = True
+    #   - 원자재 job (input_wip_id=0): 항상 외부 공급 → has_external_input = True
     #     (동일 규격 원자재가 여러 장 존재할 수 있으므로 인벤토리 체크 불필요)
-    #   - unique run (input_wip_id>0): 초기 인벤토리에 없으면 외부 원자재
+    #   - unique job (input_wip_id>0): 초기 인벤토리에 없으면 외부 원자재
     initial_wids = {
         wid for wid, w in wip_data.items()
         if w.stack_id > 0 and w.level > 0
     }
 
-    for run in run_data.values():
-        if run.input_wip_id == 0:
-            run.has_external_input = True   # 원자재 run: 항상 DIRECT_START
+    for job in job_data.values():
+        if job.input_wip_id == 0:
+            job.has_external_input = True   # 원자재 job: 항상 DIRECT_START
         else:
-            run.has_external_input = run.input_wip_id not in initial_wids
+            job.has_external_input = job.input_wip_id not in initial_wids
 
     # ── is_output_wip 마킹 ───────────────────────────────────────
     # Phase 5: generates_output=True 런의 출력재는 후속 런의 입력으로 재사용되지 않는다.
     # 해당 WIP를 PICKING 후보에서 제외하기 위해 플래그를 설정한다.
-    for run in run_data.values():
-        if run.generates_output and run.output_wip_id is not None:
-            wip = wip_data.get(run.output_wip_id)
+    for job in job_data.values():
+        if job.generates_output and job.output_wip_id is not None:
+            wip = wip_data.get(job.output_wip_id)
             if wip is not None:
                 wip.is_output_wip = True
 
-    return wip_data, run_data, inter_times, machine_times
+    return wip_data, job_data, inter_times, machine_times
 
 
 def get_crane_time(

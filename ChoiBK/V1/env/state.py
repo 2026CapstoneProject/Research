@@ -40,7 +40,7 @@ class State:
     ─ R_t^machine ───────────────────────────────────────
     phase      : MachinePhase
     K_mach     : 현재 설비 위 WIP ID 집합 (FrozenSet)
-    q_mach     : 현재 목표 run ID (None if EMPTY)
+    j_mach     : 현재 목표 job ID (None if EMPTY)
     u_short    : Σ s_k (파생 — K_mach에서 계산)
     u_long     : max l_k (파생 — K_mach에서 계산)
     eta        : 잔여 가공시간 (분)
@@ -50,8 +50,8 @@ class State:
     clock      : wall-clock 시간 (분)
 
     ─ I_t^jobs ──────────────────────────────────────────
-    Q_rem      : 미시작 run ID 집합
-    Q_done     : 완료된 run ID 집합
+    Q_rem      : 미시작 job ID 집합
+    Q_done     : 완료된 job ID 집합
     """
 
     # ── 야드 상태 ──────────────────────────────────────
@@ -65,7 +65,7 @@ class State:
     # ── 설비 상태 ──────────────────────────────────────
     phase:    MachinePhase
     K_mach:   FrozenSet[int]
-    q_mach:   Optional[int]
+    j_mach:   Optional[int]
     u_short:  float
     u_long:   float
     eta:      float
@@ -118,7 +118,7 @@ class State:
         return max(0.0, shift_end - clock_in_cycle)
 
     def is_terminal(self, max_steps: int = 0) -> bool:
-        """에피소드 종료 조건: 모든 run 완료 + 미적재 출력재/버퍼 WIP 없음
+        """에피소드 종료 조건: 모든 job 완료 + 미적재 출력재/버퍼 WIP 없음
 
         max_steps: 0이면 step 상한 없음 (simulator가 range(MAX_SIM_STEPS)로 제어).
                    양수이면 s.step >= max_steps 시 강제 종료.
@@ -141,7 +141,7 @@ class State:
             f"Step {self.step:3d} | clock={self.clock:6.1f}min | "
             f"phase={self.phase.name}",
             f"  Q_rem={sorted(self.Q_rem)} | Q_done={sorted(self.Q_done)}",
-            f"  K_mach={sorted(self.K_mach)} q={self.q_mach} "
+            f"  K_mach={sorted(self.K_mach)} q={self.j_mach} "
             f"u_s={self.u_short:.0f} u_l={self.u_long:.0f} η={self.eta:.1f}",
             f"  O_wait={sorted(self.O_wait)}",
         ]
@@ -154,12 +154,12 @@ class State:
 
 def build_initial_state(
     wip_data: dict,
-    run_data:  dict,
+    job_data:  dict,
     buffer_cap: int = 3,
     initial_crane_loc: str = "A-1",
 ) -> State:
     """
-    wip_data, run_data로부터 초기 State S_0 를 생성한다.
+    wip_data, job_data로부터 초기 State S_0 를 생성한다.
 
     - stacks: inventory 위치 정보를 stack별 LIFO 리스트로 변환
       (level이 낮은 순서 = 바닥부터 쌓임)
@@ -185,13 +185,13 @@ def build_initial_state(
         buffer_cap  = buffer_cap,
         phase       = MachinePhase.EMPTY,
         K_mach      = frozenset(),
-        q_mach      = None,
+        j_mach      = None,
         u_short     = 0.0,
         u_long      = 0.0,
         eta         = 0.0,
         O_wait      = frozenset(),
         clock       = 0.0,
-        Q_rem       = frozenset(run_data.keys()),
+        Q_rem       = frozenset(job_data.keys()),
         Q_done      = frozenset(),
         step        = 0,
     )

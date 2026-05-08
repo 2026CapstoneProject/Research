@@ -48,6 +48,6 @@ BUFFER_NODES = ["B-1", "B-2", "B-3"]
 MACHINE_NODE = "레이저설비"
 
 # ── Rolling Horizon 설정 ──────────────────────────────
-DEFAULT_HORIZON   = 20   # 기본 lookahead 스텝 수 (Phase 1의 긴 run 완료까지 보이도록 확장)
+DEFAULT_HORIZON   = 20   # 기본 lookahead 스텝 수 (Phase 1의 긴 job 완료까지 보이도록 확장)
 DEFAULT_TIME_LIM  = 3.0  # 솔버 제한 시간 (초)
 MAX_SIM_STEPS     = 3000  # 시뮬레이션 최대 스텝 수 (full production_plan 대응)

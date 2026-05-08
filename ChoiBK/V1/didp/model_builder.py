@@ -3,7 +3,7 @@ V5 Phase5 DIDPPy 모델 빌더
 V5_SDAM.md Section 11 + V5_Coding_Plan.md Section 6 참조
 
 Phase 5 변경사항:
-  - 원자재 run (input_wip_id == 0): PICKING 전이 미생성 (DIRECT_START는 DyPDL 외 greedy 처리)
+  - 원자재 job (input_wip_id == 0): PICKING 전이 미생성 (DIRECT_START는 DyPDL 외 greedy 처리)
   - 출력재 WIP (is_output_wip == True): PICKING 전이 미생성 (후속 런 재사용 불가)
   - 남은 run이 모두 원자재이면 build_didp_model() = None → greedy fallback 유도
   - output_wip_id는 STORE 후 accessible에 추가되나 PICKING 대상에서 제외됨
@@ -32,7 +32,7 @@ import math
 import os
 import sys
 
-from data.loader import WIPData, RunData
+from data.loader import WIPData, JobData
 from data.params import (
     DELTA_MIN, R_FILL, W_SHORT, W_LONG, P_RUN, P_MACH, P_BUFFER,
     STACK_TO_NODE, MACHINE_NODE, C_IDLE_WAIT, C_REL, C_TEMP, C_PRE_BONUS,
@@ -79,7 +79,7 @@ def _suppress_stderr():
 def build_didp_model(
     state:         State,
     wip_data:      Dict[int, WIPData],
-    run_data:      Dict[int, RunData],
+    job_data:      Dict[int, JobData],
     machine_times: Dict[str, float],
     horizon:       int = 8,
 ) -> Optional[object]:
@@ -97,18 +97,18 @@ def build_didp_model(
         return None
 
     # ── 인덱스 매핑 ──────────────────────────────────────────
-    active_run_ids: List[int] = sorted(state.Q_rem)
-    n_runs = len(active_run_ids)
+    active_job_ids: List[int] = sorted(state.Q_rem)
+    n_runs = len(active_job_ids)
     if n_runs == 0:
         return None
 
     # Phase 5: 남은 run이 모두 원자재(has_external_input=True)이면
     # DyPDL 모델에 PICKING 전이가 하나도 생성되지 않아 DIRECT_START를 계획할 수 없다.
     # → None 반환으로 rolling_horizon이 greedy fallback을 사용하도록 유도한다.
-    if all(run_data[rid].has_external_input for rid in active_run_ids):
+    if all(job_data[jid].has_external_input for jid in active_job_ids):
         return None
 
-    run_idx: Dict[int, int] = {rid: i for i, rid in enumerate(active_run_ids)}
+    job_idx: Dict[int, int] = {jid: i for i, jid in enumerate(active_job_ids)}
 
     top_wip_ids = set(state.accessible_wips().values())
 
@@ -120,7 +120,7 @@ def build_didp_model(
     # - 그 입력재 위에 쌓인 blocker들
     # - 현재 top WIP
     # - 설비/버퍼에 이미 있는 WIP
-    relevant_wips = compute_relevant_wip_ids(state, run_data, active_run_ids)
+    relevant_wips = compute_relevant_wip_ids(state, job_data, active_job_ids)
 
     active_wip_ids: List[int] = relevant_wips  # compute_relevant_wip_ids already returns sorted
     n_wips = len(active_wip_ids)
@@ -152,8 +152,8 @@ def build_didp_model(
 
         phase = model.add_int_var(target=int(state.phase))
 
-        q_mach_init = run_idx.get(state.q_mach, 0) if state.q_mach else 0
-        q_mach = model.add_int_var(target=q_mach_init)
+        j_mach_init = job_idx.get(state.j_mach, 0) if state.j_mach else 0
+        j_mach = model.add_int_var(target=j_mach_init)
 
         u_short = model.add_float_var(target=float(state.u_short))
         u_long  = model.add_float_var(target=float(state.u_long))
@@ -177,14 +177,14 @@ def build_didp_model(
             [wip_data[wid].long_side for wid in active_wip_ids]
         )
         cap_s_table = model.add_float_table(
-            [run_data[rid].cap_short for rid in active_run_ids]
+            [job_data[jid].cap_short for jid in active_job_ids]
         )
         cap_l_table = model.add_float_table(
-            [run_data[rid].cap_long  for rid in active_run_ids]
+            [job_data[jid].cap_long  for jid in active_job_ids]
         )
         ptime_table = model.add_int_table(
-            [max(1, int(math.ceil(run_data[rid].process_time / DELTA_MIN)))
-             for rid in active_run_ids]
+            [max(1, int(math.ceil(job_data[jid].process_time / DELTA_MIN)))
+             for jid in active_job_ids]
         )
 
         # next accessible after removing wi
@@ -223,17 +223,17 @@ def build_didp_model(
         # 1. WAIT
         _add_wait_transition(
             model, n_runs, phase, eta_discrete, steps_left,
-            Q_rem, K_mach, q_mach, empty_wips, active_run_ids, run_data,
+            Q_rem, K_mach, j_mach, empty_wips, active_job_ids, job_data,
         )
 
         # 2. PICKING(wi, ri)
         for wi, wid in enumerate(active_wip_ids):
-            for ri, rid in enumerate(active_run_ids):
-                if not _didp_compatible_picking(wid, rid, wip_data, run_data):
+            for ri, jid in enumerate(active_job_ids):
+                if not _didp_compatible_picking(wid, jid, wip_data, job_data):
                     continue
                 _add_picking_transition(
                     model, wi, ri, n_wips, SENTINEL,
-                    phase, K_mach, Q_rem, accessible, q_mach, buffered, buf_cap,
+                    phase, K_mach, Q_rem, accessible, j_mach, buffered, buf_cap,
                     u_short, u_long, eta_discrete, steps_left,
                     s_table, l_table, cap_s_table, cap_l_table,
                     next_table, wip_type,
@@ -243,7 +243,7 @@ def build_didp_model(
         for ri in range(n_runs):
             _add_start_transition(
                 model, ri,
-                phase, K_mach, Q_rem, q_mach,
+                phase, K_mach, Q_rem, j_mach,
                 u_short, u_long, eta_discrete, steps_left,
                 cap_s_table, cap_l_table, ptime_table,
                 R_FILL, W_SHORT, W_LONG,
@@ -251,13 +251,13 @@ def build_didp_model(
 
         # 4. STORE (run별 output dependency 반영)
         output_wip_idx = {
-            ri: wip_idx[run_data[rid].output_wip_id]
-            for ri, rid in enumerate(active_run_ids)
-            if run_data[rid].generates_output
-            and run_data[rid].output_wip_id in wip_idx
+            ri: wip_idx[job_data[jid].output_wip_id]
+            for ri, jid in enumerate(active_job_ids)
+            if job_data[jid].generates_output
+            and job_data[jid].output_wip_id in wip_idx
         }
         _add_store_transitions(
-            model, n_runs, phase, q_mach, steps_left,
+            model, n_runs, phase, j_mach, steps_left,
             eta_discrete, empty_wips, u_short, u_long,
             accessible, output_wip_idx,
         )
@@ -285,9 +285,9 @@ def build_didp_model(
         # 8. Phase 3: PRE_POSITION(wi) — 버퍼 needed_wip을 전략적 선배치
         # needed_wips_idx: active_wip_ids 중 어떤 run의 input_wip인 것의 인덱스 집합
         needed_wip_ids = {
-            run_data[rid].input_wip_id
-            for rid in state.Q_rem
-            if rid in run_data and run_data[rid].input_wip_id > 0
+            job_data[jid].input_wip_id
+            for jid in state.Q_rem
+            if jid in job_data and job_data[jid].input_wip_id > 0
         }
         for wi, wid in enumerate(active_wip_ids):
             if wid in needed_wip_ids:
@@ -304,7 +304,7 @@ def build_didp_model(
 
 def _add_wait_transition(
     model, n_runs: int, phase, eta_discrete, steps_left,
-    Q_rem, K_mach, q_mach, empty_wips, active_run_ids, run_data,
+    Q_rem, K_mach, j_mach, empty_wips, active_job_ids, job_data,
 ):
     """WAIT: Phase 1과 동일."""
     t_busy = dp.Transition(
@@ -318,16 +318,16 @@ def _add_wait_transition(
     )
     model.add_transition(t_busy)
 
-    for ri, rid in enumerate(active_run_ids):
+    for ri, jid in enumerate(active_job_ids):
         next_phase = (
             PHASE_BLOCKED
-            if run_data[rid].generates_output and run_data[rid].output_wip_id is not None
+            if job_data[jid].generates_output and job_data[jid].output_wip_id is not None
             else PHASE_EMPTY
         )
         t_complete = dp.Transition(
             name=f"WAIT_BUSY_COMPLETE_{ri}",
             cost=dp.FloatExpr.state_cost() + 0.0,
-            preconditions=[phase == PHASE_BUSY, eta_discrete == 1, q_mach == ri],
+            preconditions=[phase == PHASE_BUSY, eta_discrete == 1, j_mach == ri],
             effects=[
                 (phase,        next_phase),
                 (eta_discrete, 0),
@@ -349,7 +349,7 @@ def _add_wait_transition(
 
 def _add_picking_transition(
     model, wi: int, ri: int, n_wips: int, SENTINEL: int,
-    phase, K_mach, Q_rem, accessible, q_mach, buffered, buf_cap,
+    phase, K_mach, Q_rem, accessible, j_mach, buffered, buf_cap,
     u_short, u_long, eta_discrete, steps_left,
     s_table, l_table, cap_s_table, cap_l_table,
     next_table, wip_type,
@@ -364,7 +364,7 @@ def _add_picking_transition(
             ~K_mach.contains(wi),
             ~buffered.contains(wi),
             Q_rem.contains(ri),
-            (phase == PHASE_EMPTY) | (q_mach == ri),
+            (phase == PHASE_EMPTY) | (j_mach == ri),
             u_short + s_table[wi] <= cap_s_table[ri],
             dp.max(u_long, l_table[wi]) <= cap_l_table[ri],
         ],
@@ -373,7 +373,7 @@ def _add_picking_transition(
             (accessible, accessible.discard(wi).add(next_table[wi])),
             (u_short,    u_short + s_table[wi]),
             (u_long,     dp.max(u_long, l_table[wi])),
-            (q_mach,     ri),
+            (j_mach,     ri),
             (phase,      PHASE_LOADING),
             (steps_left, steps_left - 1),
         ],
@@ -389,7 +389,7 @@ def _add_picking_transition(
             ~K_mach.contains(wi),
             buffered.contains(wi),
             Q_rem.contains(ri),
-            (phase == PHASE_EMPTY) | (q_mach == ri),
+            (phase == PHASE_EMPTY) | (j_mach == ri),
             u_short + s_table[wi] <= cap_s_table[ri],
             dp.max(u_long, l_table[wi]) <= cap_l_table[ri],
         ],
@@ -400,7 +400,7 @@ def _add_picking_transition(
             (buf_cap,    buf_cap + 1),
             (u_short,    u_short + s_table[wi]),
             (u_long,     dp.max(u_long, l_table[wi])),
-            (q_mach,     ri),
+            (j_mach,     ri),
             (phase,      PHASE_LOADING),
             (steps_left, steps_left - 1),
         ],
@@ -410,7 +410,7 @@ def _add_picking_transition(
 
 def _add_start_transition(
     model, ri: int,
-    phase, K_mach, Q_rem, q_mach,
+    phase, K_mach, Q_rem, j_mach,
     u_short, u_long, eta_discrete, steps_left,
     cap_s_table, cap_l_table, ptime_table,
     r_fill, w_short, w_long,
@@ -427,7 +427,7 @@ def _add_start_transition(
         preconditions=[
             phase == PHASE_LOADING,
             K_mach.len() >= 1,
-            q_mach == ri,
+            j_mach == ri,
             Q_rem.contains(ri),
         ],
         effects=[
@@ -440,7 +440,7 @@ def _add_start_transition(
 
 
 def _add_store_transitions(
-    model, n_runs: int, phase, q_mach, steps_left,
+    model, n_runs: int, phase, j_mach, steps_left,
     eta_discrete, empty_wips, u_short, u_long,
     accessible, output_wip_idx: Dict[int, int],
 ):
@@ -459,7 +459,7 @@ def _add_store_transitions(
         t = dp.Transition(
             name=f"STORE_{ri}",
             cost=dp.FloatExpr.state_cost() + 0.0,
-            preconditions=[phase == PHASE_BLOCKED, q_mach == ri],
+            preconditions=[phase == PHASE_BLOCKED, j_mach == ri],
             effects=effects,
         )
         model.add_transition(t)
@@ -613,8 +613,8 @@ def _terminal_expr(Q_rem, K_mach, buffered, phase, n_runs, n_wips):
 
 def compute_relevant_wip_ids(
     state: State,
-    run_data: Dict[int, RunData],
-    active_run_ids: List[int],
+    job_data: Dict[int, JobData],
+    active_job_ids: List[int],
 ) -> List[int]:
     """
     Phase 2 lookahead에서 추적해야 할 WIP 집합을 계산한다.
@@ -632,9 +632,9 @@ def compute_relevant_wip_ids(
             relevant.add(stack[-1])
 
     targets = {
-        run_data[rid].input_wip_id
-        for rid in active_run_ids
-        if run_data[rid].input_wip_id > 0
+        job_data[jid].input_wip_id
+        for jid in active_job_ids
+        if job_data[jid].input_wip_id > 0
     }
     for target in targets:
         relevant.add(target)
@@ -650,36 +650,36 @@ def compute_relevant_wip_ids(
 
 def _didp_compatible_picking(
     wid: int,
-    rid: int,
+    jid: int,
     wip_data: Dict[int, WIPData],
-    run_data: Dict[int, RunData],
+    job_data: Dict[int, JobData],
 ) -> bool:
     """
-    DyPDL 모델에서 PICKING(wid, rid) 전이를 생성할지 결정한다.
+    DyPDL 모델에서 PICKING(wid, jid) 전이를 생성할지 결정한다.
 
     Phase 5:
-      - 원자재 run (input_wip_id == 0): DIRECT_START만 허용, PICKING 전이 생성 안 함
+      - 원자재 job (input_wip_id == 0): DIRECT_START만 허용, PICKING 전이 생성 안 함
       - 출력재 WIP (is_output_wip == True): 후속 런 입력 재사용 불가, PICKING 전이 생성 안 함
-      - unique run (input_wip_id > 0): 정확히 해당 WIP ID만 허용
+      - unique job (input_wip_id > 0): 정확히 해당 WIP ID만 허용
     """
-    run = run_data[rid]
+    job = job_data[jid]
     wip = wip_data[wid]
-    # 원자재 run: DyPDL PICKING 전이 없음 (DIRECT_START는 별도 처리)
-    if run.input_wip_id == 0:
+    # 원자재 job: DyPDL PICKING 전이 없음 (DIRECT_START는 별도 처리)
+    if job.input_wip_id == 0:
         return False
     # 출력재 WIP: 후속 런의 입력으로 재사용 불가
     if wip.is_output_wip:
         return False
-    # unique run: 정확히 해당 WIP만 허용
-    return run.input_wip_id == wid
+    # unique job: 정확히 해당 WIP만 허용
+    return job.input_wip_id == wid
 
 
-def _matches_run_template(wip: WIPData, run: RunData) -> bool:
+def _matches_job_template(wip: WIPData, job: JobData) -> bool:
     return (
-        wip.grade == run.grade
-        and abs(wip.thickness - run.thickness) <= 0.1
-        and abs(wip.short_side - run.short_side) <= 1.0
-        and abs(wip.long_side - run.long_side) <= 1.0
+        wip.grade == job.grade
+        and abs(wip.thickness - job.thickness) <= 0.1
+        and abs(wip.short_side - job.short_side) <= 1.0
+        and abs(wip.long_side - job.long_side) <= 1.0
     )
 
 
@@ -717,9 +717,9 @@ def extract_first_action(
     solution,
     state: State,
     wip_data: Dict[int, WIPData],
-    run_data:  Dict[int, RunData],
+    job_data:  Dict[int, JobData],
     active_wip_ids: List[int],
-    active_run_ids: List[int],
+    active_job_ids: List[int],
 ) -> Optional[Action]:
     """DIDPPy solution에서 첫 번째 전이 → Action 변환."""
     if solution is None or len(solution) == 0:
@@ -727,8 +727,8 @@ def extract_first_action(
 
     first_trans_name = solution[0].name
     return _parse_transition_name(
-        first_trans_name, state, wip_data, run_data,
-        active_wip_ids, active_run_ids,
+        first_trans_name, state, wip_data, job_data,
+        active_wip_ids, active_job_ids,
     )
 
 
@@ -736,9 +736,9 @@ def _parse_transition_name(
     name: str,
     state: State,
     wip_data: Dict[int, WIPData],
-    run_data:  Dict[int, RunData],
+    job_data:  Dict[int, JobData],
     active_wip_ids: List[int],
-    active_run_ids: List[int],
+    active_job_ids: List[int],
 ) -> Optional[Action]:
     """전이 이름 문자열 → Action 변환 (Phase 2: MOVE/TEMP_MOVE 추가)"""
     from env.actions import CraneAction, ProdAction, Action, CRANE_MOVE, CRANE_TEMP_MOVE
@@ -748,7 +748,7 @@ def _parse_transition_name(
         from_buffer = parts[1] == "BUF"
         wi, ri = int(parts[2]), int(parts[3])
         wid = active_wip_ids[wi]
-        rid = active_run_ids[ri]
+        jid = active_job_ids[ri]
         src_stack = None
         if not from_buffer:
             for sid, stk in state.stacks.items():
@@ -756,26 +756,26 @@ def _parse_transition_name(
                     src_stack = sid
                     break
         return Action(
-            crane=CraneAction(CRANE_PICKING, wip_id=wid, src_stack=src_stack, run_id=rid),
+            crane=CraneAction(CRANE_PICKING, wip_id=wid, src_stack=src_stack, job_id=jid),
             prod=ProdAction(PROD_NONE),
         )
 
     if name.startswith("START_"):
         ri = int(name.split("_")[1])
-        rid = active_run_ids[ri]
+        jid = active_job_ids[ri]
         return Action(
             crane=CraneAction(CRANE_WAIT),
-            prod=ProdAction(PROD_START, run_id=rid),
+            prod=ProdAction(PROD_START, job_id=jid),
         )
 
     if name.startswith("STORE_"):
         dst = min(state.stacks.keys(), key=lambda s: len(state.stacks[s]))
         o_wait_id = next(iter(state.O_wait), None) if state.O_wait else None
         ri = int(name.split("_")[1])
-        rid = active_run_ids[ri]
+        jid = active_job_ids[ri]
         return Action(
             crane=CraneAction(CRANE_STORE, wip_id=o_wait_id, dst_stack=dst,
-                              run_id=rid),
+                              job_id=jid),
             prod=ProdAction(PROD_NONE),
         )
 

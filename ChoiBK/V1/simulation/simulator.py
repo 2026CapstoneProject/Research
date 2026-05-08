@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
 
-from data.loader import WIPData, RunData
+from data.loader import WIPData, JobData
 from data.params import MAX_SIM_STEPS, SHIFT_END, STACK_TO_NODE
 from env.state import State
 from env.actions import (
@@ -21,7 +21,7 @@ from env.cost import step_cost, terminal_cost, episode_summary
 def run_episode(
     initial_state: State,
     wip_data:      Dict[int, WIPData],
-    run_data:      Dict[int, RunData],
+    job_data:      Dict[int, JobData],
     inter_times:   Dict,
     machine_times: Dict,
     policy:        Callable,
@@ -31,7 +31,7 @@ def run_episode(
     """
     에피소드 전체 시뮬레이션.
 
-    policy: Callable(state, wip_data, run_data, machine_times) → (Action, float)
+    policy: Callable(state, wip_data, job_data, machine_times) → (Action, float)
     output_path: 결과를 저장할 .md 또는 .txt 파일 경로 (None이면 저장 안 함)
 
     Returns:
@@ -45,7 +45,7 @@ def run_episode(
         "=" * 60,
         "V5 Phase5 시뮬레이션 시작",
         f"총 WIP: {sum(len(v) for v in s.stacks.values())}",
-        f"총 Run: {len(s.Q_rem)}",
+        f"총 Job: {len(s.Q_rem)}",
         "=" * 60,
     ]
     if verbose:
@@ -58,8 +58,8 @@ def run_episode(
         if s.is_terminal():
             end_lines = [
                 f"\n[Step {step_num}] 에피소드 종료",
-                f"  완료 run: {sorted(s.Q_done)}",
-                f"  미완료 run: {sorted(s.Q_rem)}",
+                f"  완료 job: {sorted(s.Q_done)}",
+                f"  미완료 job: {sorted(s.Q_rem)}",
                 f"  최종 clock: {s.clock:.1f}분",
             ]
             if verbose:
@@ -69,7 +69,7 @@ def run_episode(
             break
 
         # ── 정책 호출 ──────────────────────────────────────────
-        action, lh_cost = policy(s, wip_data, run_data, machine_times)
+        action, lh_cost = policy(s, wip_data, job_data, machine_times)
 
         # 무인가공 시간대 WAIT|NONE 상태: 다음 사이클에서 할 수 있는 run이
         # 전혀 없으면 더 진행해도 상태가 개선되지 않으므로 종료한다.
@@ -78,12 +78,12 @@ def run_episode(
             s.is_unm(SHIFT_END)
             and action.crane.type == CRANE_WAIT
             and action.prod.type == PROD_NONE
-            and _no_future_work(s, wip_data, run_data)
+            and _no_future_work(s, wip_data, job_data)
         ):
             end_lines = [
-                f"\n[Step {step_num}] 더 이상 처리 가능한 run 없음. 종료",
-                f"  완료 run: {sorted(s.Q_done)}",
-                f"  미완료 run: {sorted(s.Q_rem)}",
+                f"\n[Step {step_num}] 더 이상 처리 가능한 job 없음. 종료",
+                f"  완료 job: {sorted(s.Q_done)}",
+                f"  미완료 job: {sorted(s.Q_rem)}",
                 f"  최종 clock: {s.clock:.1f}분",
             ]
             if verbose:
@@ -96,10 +96,10 @@ def run_episode(
         tau = get_tau(action.crane, s, inter_times, machine_times)
 
         # ── 비용 계산 ─────────────────────────────────────────
-        cost = step_cost(s, action, run_data, tau)
+        cost = step_cost(s, action, job_data, tau)
 
         # ── 상태 전이 ─────────────────────────────────────────
-        s_next = transition(s, action, wip_data, run_data, inter_times, machine_times)
+        s_next = transition(s, action, wip_data, job_data, inter_times, machine_times)
 
         # ── 로그 ─────────────────────────────────────────────
         log.append({
@@ -120,7 +120,7 @@ def run_episode(
         s = s_next
 
     # ── Terminal cost ─────────────────────────────────────────
-    t_cost = terminal_cost(s, run_data=run_data)
+    t_cost = terminal_cost(s, job_data=job_data)
     t_line = f"\nTerminal cost: {t_cost:.2f}"
     if verbose:
         print(t_line)
@@ -129,7 +129,7 @@ def run_episode(
     # ── 파일 저장 ─────────────────────────────────────────────
     if output_path is not None:
         _save_result(
-            output_path, log, wip_data, run_data,
+            output_path, log, wip_data, job_data,
             header_lines, step_lines, t_cost,
         )
         print(f"\n결과 저장 완료: {output_path}")
@@ -151,12 +151,12 @@ def _print_step(step: int, state: State, action: Action, cost: float, tau: float
     print(_format_step(step, state, action, cost, tau))
 
 
-def _build_summary_lines(log: List[dict], run_data: Optional[Dict[int, RunData]] = None) -> List[str]:
+def _build_summary_lines(log: List[dict], job_data: Optional[Dict[int, JobData]] = None) -> List[str]:
     """에피소드 요약 문자열 리스트 생성 (출력·저장 공용)"""
     if not log:
         return ["로그가 비어있습니다."]
 
-    summary = episode_summary(log, run_data=run_data)
+    summary = episode_summary(log, job_data=job_data)
 
     lines = [
         "",
@@ -164,8 +164,8 @@ def _build_summary_lines(log: List[dict], run_data: Optional[Dict[int, RunData]]
         "에피소드 요약",
         "=" * 60,
         f"  총 스텝:           {summary['n_steps']}",
-        f"  완료 run:          {summary['runs_done']}",
-        f"  미완료 run:        {summary['runs_remain']}",
+        f"  완료 job:          {summary['jobs_done']}",
+        f"  미완료 job:        {summary['jobs_remain']}",
         f"  최종 시각:         {summary['clock_end']:.1f}분",
         f"  PICKING 횟수:         {summary['n_pickings']}",
         f"  START 횟수:        {summary['n_starts']}",
@@ -178,15 +178,15 @@ def _build_summary_lines(log: List[dict], run_data: Optional[Dict[int, RunData]]
         f"  누적 비용:         {summary['total_cost']:.2f}",
         "=" * 60,
         "",
-        "완료된 Run 상세:",
+        "완료된 Job 상세:",
     ]
 
     start_entries = [e for e in log if e["action"].prod.type == "START_PROCESS"]
     for e in start_entries:
         s = e["state_before"]
-        q = e["action"].prod.run_id
+        q = e["action"].prod.job_id
         lines.append(
-            f"  Run {q:3d} | t={s.clock:6.1f}min | "
+            f"  Job {q:3d} | t={s.clock:6.1f}min | "
             f"K_mach={sorted(s.K_mach)} | "
             f"fill={s.u_short:.0f}/{s.u_long:.0f}mm"
         )
@@ -194,9 +194,9 @@ def _build_summary_lines(log: List[dict], run_data: Optional[Dict[int, RunData]]
     return lines
 
 
-def print_summary(log: List[dict], run_data: Optional[Dict[int, RunData]] = None):
+def print_summary(log: List[dict], job_data: Optional[Dict[int, JobData]] = None):
     """에피소드 요약 출력"""
-    for line in _build_summary_lines(log, run_data=run_data):
+    for line in _build_summary_lines(log, job_data=job_data):
         print(line)
 
 
@@ -208,7 +208,7 @@ def _save_result(
     output_path: str,
     log:         List[dict],
     wip_data:    Dict[int, WIPData],
-    run_data:    Dict[int, RunData],
+    job_data:    Dict[int, JobData],
     header_lines: List[str],
     step_lines:   List[str],
     t_cost:       float,
@@ -217,10 +217,10 @@ def _save_result(
     시뮬레이션 결과를 마크다운(.md) 또는 텍스트(.txt) 파일로 저장한다.
 
     파일 구성:
-      1. 메타 정보 (실행 시각, 정책, Run 목록)
+      1. 메타 정보 (실행 시각, 정책, Job 목록)
       2. 전체 스텝 로그
       3. 적재 순서 요약 (어떤 WIP을 어떤 순서로 적재했는지)
-      4. Run별 배치 결과 (Run ID, 투입 WIP, fill)
+      4. Run별 배치 결과 (Job ID, 투입 WIP, fill)
       5. 이동 이력 (MOVE / TEMP_MOVE / RESTORE)
       6. 에피소드 요약 통계
     """
@@ -240,35 +240,35 @@ def _save_result(
         "",
         f"- 실행 시각: {now}",
         f"- 총 WIP 수: {sum(len(v) for v in log[0]['state_before'].stacks.values()) if log else 'N/A'}",
-        f"- 총 Run 수: {len(run_data)}",
-        f"- Run 목록:  {sorted(run_data.keys())}",
+        f"- 총 Job 수: {len(job_data)}",
+        f"- Job 목록:  {sorted(job_data.keys())}",
         "",
     ]
 
-    # ── Run 입력재 정보 ───────────────────────────────────────
-    lines += [h2("Run 목록 및 입력재"), ""]
+    # ── Job 입력재 정보 ───────────────────────────────────────
+    lines += [h2("Job 목록 및 입력재"), ""]
     if is_md:
         lines += [
-            "| Run ID | 입력 WIP | 스택 | 레벨 | Spec | 공정시간(분) | C_short | C_long |",
+            "| Job ID | 입력 WIP | 스택 | 레벨 | Spec | 공정시간(분) | C_short | C_long |",
             "|--------|----------|------|------|------|------------|---------|--------|",
         ]
-        for rid, run in sorted(run_data.items()):
-            wip = wip_data.get(run.input_wip_id)
+        for jid, job in sorted(job_data.items()):
+            wip = wip_data.get(job.input_wip_id)
             loc = f"{wip.stack_id}" if wip else "-"
             lv  = f"{wip.level}"   if wip else "-"
             lines.append(
-                f"| {rid} | {run.input_wip_id} | {loc} | {lv} | "
-                f"{run.spec} | {run.process_time:.1f} | "
-                f"{run.cap_short:.0f} | {run.cap_long:.0f} |"
+                f"| {jid} | {job.input_wip_id} | {loc} | {lv} | "
+                f"{job.spec} | {job.process_time:.1f} | "
+                f"{job.cap_short:.0f} | {job.cap_long:.0f} |"
             )
     else:
-        for rid, run in sorted(run_data.items()):
-            wip = wip_data.get(run.input_wip_id)
+        for jid, job in sorted(job_data.items()):
+            wip = wip_data.get(job.input_wip_id)
             loc = f"stack={wip.stack_id} lv={wip.level}" if wip else "N/A"
             lines.append(
-                f"  Run {rid:3d}: WIP {run.input_wip_id:3d} [{loc}] | "
-                f"{run.spec:20s} | ptime={run.process_time:.1f}분 | "
-                f"C_s={run.cap_short:.0f} C_l={run.cap_long:.0f}"
+                f"  Job {jid:3d}: WIP {job.input_wip_id:3d} [{loc}] | "
+                f"{job.spec:20s} | ptime={job.process_time:.1f}분 | "
+                f"C_s={job.cap_short:.0f} C_l={job.cap_long:.0f}"
             )
     lines.append("")
 
@@ -277,7 +277,7 @@ def _save_result(
     picking_entries = [e for e in log if e["action"].crane.type == "PICKING"]
     if is_md:
         lines += [
-            "| # | 시각(분) | WIP ID | 출처 | Run ID | 적재 후 u_short | 적재 후 u_long |",
+            "| # | 시각(분) | WIP ID | 출처 | Job ID | 적재 후 u_short | 적재 후 u_long |",
             "|---|--------|--------|------|--------|--------------|--------------|",
         ]
         for idx, e in enumerate(picking_entries, 1):
@@ -287,7 +287,7 @@ def _save_result(
             wip = wip_data.get(a.wip_id)
             s_next = e["state_after"]
             lines.append(
-                f"| {idx} | {s.clock:.1f} | {a.wip_id} | {src} | {a.run_id} | "
+                f"| {idx} | {s.clock:.1f} | {a.wip_id} | {src} | {a.job_id} | "
                 f"{s_next.u_short:.0f} | {s_next.u_long:.0f} |"
             )
     else:
@@ -300,7 +300,7 @@ def _save_result(
             s_next = e["state_after"]
             lines.append(
                 f"  [{idx:2d}] t={s.clock:6.1f}min | WIP {a.wip_id:3d}({spec}) "
-                f"← {src} | Run {a.run_id} | "
+                f"← {src} | Job {a.job_id} | "
                 f"u={s_next.u_short:.0f}/{s_next.u_long:.0f}mm"
             )
     lines.append("")
@@ -310,17 +310,17 @@ def _save_result(
     start_entries = [e for e in log if e["action"].prod.type == "START_PROCESS"]
     if is_md:
         lines += [
-            "| Run ID | 시작 시각(분) | 투입 WIP 목록 | u_short(mm) | u_long(mm) | 비용 |",
+            "| Job ID | 시작 시각(분) | 투입 WIP 목록 | u_short(mm) | u_long(mm) | 비용 |",
             "|--------|------------|-------------|-----------|----------|------|",
         ]
         for e in start_entries:
             s = e["state_before"]
-            q = e["action"].prod.run_id
-            run = run_data.get(q)
+            q = e["action"].prod.job_id
+            job = job_data.get(q)
             fill_pct = ""
-            if run:
-                pct_s = s.u_short / run.cap_short * 100 if run.cap_short else 0
-                pct_l = s.u_long  / run.cap_long  * 100 if run.cap_long  else 0
+            if job:
+                pct_s = s.u_short / job.cap_short * 100 if job.cap_short else 0
+                pct_l = s.u_long  / job.cap_long  * 100 if job.cap_long  else 0
                 fill_pct = f" ({pct_s:.0f}%/{pct_l:.0f}%)"
             lines.append(
                 f"| {q} | {s.clock:.1f} | {sorted(s.K_mach)} | "
@@ -329,14 +329,14 @@ def _save_result(
     else:
         for e in start_entries:
             s = e["state_before"]
-            q = e["action"].prod.run_id
-            run = run_data.get(q)
+            q = e["action"].prod.job_id
+            job = job_data.get(q)
             fill_pct = ""
-            if run:
-                pct_s = s.u_short / run.cap_short * 100 if run.cap_short else 0
+            if job:
+                pct_s = s.u_short / job.cap_short * 100 if job.cap_short else 0
                 fill_pct = f" (단변 {pct_s:.0f}% 충진)"
             lines.append(
-                f"  Run {q:3d} | t={s.clock:6.1f}min | "
+                f"  Job {q:3d} | t={s.clock:6.1f}min | "
                 f"WIP {sorted(s.K_mach)}{fill_pct} | "
                 f"u_short={s.u_short:.0f}mm u_long={s.u_long:.0f}mm"
             )
@@ -412,7 +412,7 @@ def _save_result(
             "- 아래 요약은 실제 전체 episode 기준이며, 위 스텝 로그 본문에서만 무인가공 WAIT 스텝을 생략했습니다.",
             "",
         ]
-    lines += _build_summary_lines(log, run_data=run_data)
+    lines += _build_summary_lines(log, job_data=job_data)
 
     # ── 파일 쓰기 ─────────────────────────────────────────────
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
@@ -436,10 +436,10 @@ def _is_unmanned_wait_step(entry: dict) -> bool:
 def _no_future_work(
     state,
     wip_data: dict,
-    run_data:  dict,
+    job_data:  dict,
 ) -> bool:
     """
-    남은 run 중 다음 교대 사이클(유인 근무 시간)에 처리 가능한 run이
+    남은 job 중 다음 교대 사이클(유인 근무 시간)에 처리 가능한 run이
     하나도 없으면 True를 반환한다.
 
     처리 가능 조건:
@@ -452,19 +452,19 @@ def _no_future_work(
     if len(state.O_wait) > 0:
         return False
 
-    from env.feasibility import _matches_run_template
+    from env.feasibility import _matches_job_template
 
-    for rid in state.Q_rem:
-        run = run_data.get(rid)
-        if run is None:
+    for jid in state.Q_rem:
+        job = job_data.get(jid)
+        if job is None:
             continue
-        # 조건 1: 원자재 run (input_wip_id==0 포함, has_external_input=True)
+        # 조건 1: 원자재 job (input_wip_id==0 포함, has_external_input=True)
         #   → 원자재 공급으로 언제든 DIRECT_START 가능
-        if run.has_external_input:
+        if job.has_external_input:
             return False
-        # 조건 2: unique run — 해당 WIP가 야드 어딘가에 존재
+        # 조건 2: unique job — 해당 WIP가 야드 어딘가에 존재
         for stk in state.stacks.values():
-            if run.input_wip_id in stk:
+            if job.input_wip_id in stk:
                 return False
 
-    return True  # 처리 가능한 run 없음
+    return True  # 처리 가능한 job 없음

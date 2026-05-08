@@ -9,7 +9,7 @@ Terminal penalty:
   P_RUN     · |Q_rem|
 + P_BUFFER  · |buffer_wips|
 + P_MACH    · (|K_mach| + |O_wait|)
-+ P_BLOCKER · Σ_{run ∈ Q_rem} blocker_count(input_wip)
++ P_BLOCKER · Σ_{job ∈ Q_rem} blocker_count(input_wip)
 """
 
 from typing import Dict, Optional
@@ -20,7 +20,7 @@ from data.params import (
     P_RUN, P_BUFFER, P_MACH, P_BLOCKER,
     SHIFT_END, UNM_END,
 )
-from data.loader import RunData
+from data.loader import JobData
 from env.state import State, MachinePhase
 from env.actions import Action, CRANE_MOVE, CRANE_TEMP_MOVE, PROD_START, PROD_DIRECT_START
 
@@ -28,7 +28,7 @@ from env.actions import Action, CRANE_MOVE, CRANE_TEMP_MOVE, PROD_START, PROD_DI
 def step_cost(
     state:    State,
     action:   Action,
-    run_data: Dict[int, RunData],
+    job_data: Dict[int, JobData],
     tau:      float,
 ) -> float:
     """
@@ -49,20 +49,20 @@ def step_cost(
         cost += C_TEMP
 
     # ── Δ_t^fill: 설비 적재율 보상 ────────────
-    if prod.type == PROD_START and state.q_mach is not None:
-        q = state.q_mach
-        run = run_data.get(q)
-        if run is not None and run.cap_short > 0 and run.cap_long > 0:
+    if prod.type == PROD_START and state.j_mach is not None:
+        q = state.j_mach
+        job = job_data.get(q)
+        if job is not None and job.cap_short > 0 and job.cap_long > 0:
             fill_util = (
-                W_SHORT * state.u_short / run.cap_short
-                + W_LONG  * state.u_long  / run.cap_long
+                W_SHORT * state.u_short / job.cap_short
+                + W_LONG  * state.u_long  / job.cap_long
             )
             cost -= R_FILL * fill_util   # 보상 → 음수
 
     # ── DIRECT_START fill 보상 (원자재 run은 cap 전체 사용으로 간주) ──
     if prod.type == PROD_DIRECT_START:
-        run = run_data.get(prod.run_id)
-        if run is not None:
+        job = job_data.get(prod.job_id)
+        if job is not None:
             # 원자재는 배치 정원을 채운 것으로 처리 → fill_util = 1.0
             cost -= R_FILL * 1.0   # 보상 → 음수
 
@@ -78,15 +78,15 @@ def step_cost(
 
 def terminal_cost(
     state: State,
-    run_data: Optional[Dict[int, RunData]] = None,
+    job_data: Optional[Dict[int, JobData]] = None,
 ) -> float:
     """
     에피소드 종료 시 terminal penalty C_T(S_T)
-    - 미완료 run 수
+    - 미완료 job 수
     - 버퍼 미복원 WIP 수
     - 설비 위 미시작 WIP 수
     - 생산 완료 후 미적재 출력재 수
-    - blocker WIP 수 (필요 WIP 위에 눌린 WIP, run_data 제공 시)
+    - blocker WIP 수 (필요 WIP 위에 눌린 WIP, job_data 제공 시)
     """
     penalty = 0.0
     penalty += P_RUN    * len(state.Q_rem)
@@ -95,11 +95,11 @@ def terminal_cost(
     penalty += P_MACH   * len(state.O_wait)
 
     # P_BLOCKER: 미완료 run의 input_wip 위에 쌓인 blocker WIP 수
-    if run_data is not None:
-        for rid in state.Q_rem:
-            if rid not in run_data:
+    if job_data is not None:
+        for jid in state.Q_rem:
+            if jid not in job_data:
                 continue
-            target_wip = run_data[rid].input_wip_id
+            target_wip = job_data[jid].input_wip_id
             if target_wip <= 0:
                 continue
             for stack in state.stacks.values():
@@ -114,10 +114,10 @@ def terminal_cost(
     return penalty
 
 
-def episode_summary(log: list, run_data: Optional[Dict[int, RunData]] = None) -> dict:
+def episode_summary(log: list, job_data: Optional[Dict[int, JobData]] = None) -> dict:
     """시뮬레이션 로그로부터 에피소드 요약 통계 계산"""
     total_cost = sum(entry["cost"] for entry in log)
-    total_cost += terminal_cost(log[-1]["state_after"], run_data=run_data) if log else 0.0
+    total_cost += terminal_cost(log[-1]["state_after"], job_data=job_data) if log else 0.0
 
     n_pickings       = sum(1 for e in log if e["action"].crane.type == "PICKING")
     n_starts      = sum(1 for e in log if e["action"].prod.type  == "START_PROCESS")
@@ -147,7 +147,7 @@ def episode_summary(log: list, run_data: Optional[Dict[int, RunData]] = None) ->
         "n_restores":      n_restores,
         "n_pre_positions": n_pre_pos,
         "n_waits":         n_waits,
-        "runs_done":       len(final_state.Q_done) if final_state else 0,
-        "runs_remain":     len(final_state.Q_rem)  if final_state else 0,
+        "jobs_done":       len(final_state.Q_done) if final_state else 0,
+        "jobs_remain":     len(final_state.Q_rem)  if final_state else 0,
         "clock_end":       final_state.clock       if final_state else 0.0,
     }

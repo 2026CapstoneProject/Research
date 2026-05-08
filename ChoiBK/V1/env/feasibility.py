@@ -1,10 +1,10 @@
 """
-  - input_wip_id == 0 인 run은 모두 원자재(raw material) run.
+  - input_wip_id == 0 인 run은 모두 원자재(raw material) job.
     인벤토리 WIP을 LOAD하지 않고 DIRECT_START만 허용.
     동일 규격 원자재가 여러 장 존재할 수 있으므로 인벤토리 체크 없이 항상 실행 가능.
   - generates_output=True 런의 출력재(is_output_wip=True)는 PICKING 후보에서 영구 제외.
   - DIRECT_START는 PICKING 유무와 무관하게 EMPTY 상태에서 항상 후보로 추가.
-  - idle/busy marshalling의 generic run 블로커 탐색 제거 (원자재 run은 야드 WIP 불필요).
+  - idle/busy marshalling의 generic job 블로커 탐색 제거 (원자재 run은 야드 WIP 불필요).
   Section 7.7  PRE_POSITION 허용 — BUSY 중 버퍼 WIP을 미래 PICKING 최적 위치로 선배치
                조건: 해당 버퍼 WIP이 Q_rem의 어떤 unique run의 input_wip_id인 경우만 생성
                전략: WIP 수 최소 스택을 선택 (최상단 즉시 접근 보장)
@@ -13,7 +13,7 @@
 
 from typing import Dict, List, Set
 from data.params import SHIFT_END, STACK_TO_NODE
-from data.loader import WIPData, RunData
+from data.loader import WIPData, JobData
 from env.state import State, MachinePhase
 from env.actions import (
     Action, CraneAction, ProdAction,
@@ -31,7 +31,7 @@ from env.actions import (
 def get_feasible_actions(
     state: State,
     wip_data:  Dict[int, WIPData],
-    run_data:  Dict[int, RunData],
+    job_data:  Dict[int, JobData],
 ) -> List[Action]:
     """
     현재 상태 S_t에서 실행 가능한 행동 목록을 반환한다.
@@ -41,8 +41,8 @@ def get_feasible_actions(
       - EMPTY: PICKING 없을 때 블로커 MOVE / TEMP_MOVE 허용 (idle marshalling)
                단, 무인가공 시간대는 is_unm 가드로 막혀 크레인 정지 유지
       - EMPTY/LOADING: 버퍼 WIP도 PICKING 대상
-      - EMPTY에서 generic run(input_wip_id == 0)의 첫 PICKING 후보를 탐색
-      - same_spec + run template 체크 정밀화
+      - EMPTY에서 generic job(input_wip_id == 0)의 첫 PICKING 후보를 탐색
+      - same_spec + job template 체크 정밀화
     """
     phase = state.phase
 
@@ -52,7 +52,7 @@ def get_feasible_actions(
             return [WAIT_CONTINUE]
         if phase == MachinePhase.LOADING:
             acts: List[Action] = []
-            _add_start_process_actions(state, run_data, acts)
+            _add_start_process_actions(state, job_data, acts)
             acts.append(WAIT_NONE)
             return acts
         return [WAIT_NONE]
@@ -68,26 +68,26 @@ def get_feasible_actions(
     # ── BUSY: 재배치 행동 허용 ──────────────────
     # Phase 2: MOVE / TEMP_MOVE / RESTORE 추가
     if phase == MachinePhase.BUSY:
-        _add_marshalling_actions(state, wip_data, run_data, actions)
+        _add_marshalling_actions(state, wip_data, job_data, actions)
         actions.append(WAIT_CONTINUE)
         return actions
 
     # ── EMPTY / LOADING: PICKING 또는 START_PROCESS ─────────────
     if phase in (MachinePhase.EMPTY, MachinePhase.LOADING):
-        _add_picking_actions(state, wip_data, run_data, actions)
-        _add_start_process_actions(state, run_data, actions)
+        _add_picking_actions(state, wip_data, job_data, actions)
+        _add_start_process_actions(state, job_data, actions)
         if phase == MachinePhase.EMPTY:
             _add_cleanup_restore_actions(state, actions)
-            # Phase 5: 원자재 run DIRECT_START는 PICKING 유무와 무관하게 항상 추가
+            # Phase 5: 원자재 job DIRECT_START는 PICKING 유무와 무관하게 항상 추가
             # (원자재는 인벤토리 WIP 없이도 항상 실행 가능, 동일 규격 여러 장 허용)
-            _add_direct_start_actions(state, run_data, actions)
+            _add_direct_start_actions(state, job_data, actions)
             # LOAD도 없고 DIRECT_START도 없으면 블로커 제거 (매몰 WIP 발굴)
             any_productive = any(
                 a.crane.type == CRANE_PICKING or a.prod.type == PROD_DIRECT_START
                 for a in actions
             )
             if not any_productive:
-                _add_idle_marshalling_actions(state, wip_data, run_data, actions)
+                _add_idle_marshalling_actions(state, wip_data, job_data, actions)
 
     # WAIT은 항상 추가
     if phase == MachinePhase.BUSY:
@@ -105,7 +105,7 @@ def get_feasible_actions(
 def _add_marshalling_actions(
     state:    State,
     wip_data: Dict[int, WIPData],
-    run_data: Dict[int, RunData],
+    job_data: Dict[int, JobData],
     out:      List[Action],
 ) -> None:
     """
@@ -126,9 +126,9 @@ def _add_marshalling_actions(
 
     # Q_rem의 input_wip 집합 (PRE_POSITION 대상 판별용)
     needed_wips: Set[int] = {
-        run_data[rid].input_wip_id
-        for rid in state.Q_rem
-        if rid in run_data and run_data[rid].input_wip_id > 0
+        job_data[jid].input_wip_id
+        for jid in state.Q_rem
+        if jid in job_data and job_data[jid].input_wip_id > 0
     }
 
     # ── MOVE / TEMP_MOVE ──────────────────────────────────────
@@ -219,7 +219,7 @@ def _add_cleanup_restore_actions(
 def _add_idle_marshalling_actions(
     state:    State,
     wip_data: Dict[int, WIPData],
-    run_data: Dict[int, RunData],
+    job_data: Dict[int, JobData],
     out:      List[Action],
 ) -> None:
     """
@@ -227,14 +227,14 @@ def _add_idle_marshalling_actions(
     LOAD도 없고 DIRECT_START도 없을 때만 호출되며, 무인가공 시간대는 is_unm 가드로 차단됨.
     prod는 PROD_NONE (설비 미가동 상태).
 
-    원자재 run (input_wip_id==0)은 야드 WIP을 사용하지 않으므로 블로커 탐색 제외.
-    Unique run (input_wip_id > 0)의 needed_wip 위에 쌓인 WIP만 blocker로 간주한다.
+    원자재 job (input_wip_id==0)은 야드 WIP을 사용하지 않으므로 블로커 탐색 제외.
+    Unique job (input_wip_id > 0)의 needed_wip 위에 쌓인 WIP만 blocker로 간주한다.
     """
     # unique run의 needed_wip 집합
     needed_wips: Set[int] = {
-        run_data[rid].input_wip_id
-        for rid in state.Q_rem
-        if rid in run_data and run_data[rid].input_wip_id > 0
+        job_data[jid].input_wip_id
+        for jid in state.Q_rem
+        if jid in job_data and job_data[jid].input_wip_id > 0
     }
     blockers: Set[int] = set()
     for sid, stack in state.stacks.items():
@@ -287,22 +287,22 @@ def _add_idle_marshalling_actions(
 def _add_picking_actions(
     state: State,
     wip_data:  Dict[int, WIPData],
-    run_data:  Dict[int, RunData],
+    job_data:  Dict[int, JobData],
     out:       List[Action],
 ) -> None:
     """
-    PICKING(k, src_stack, run_id) 후보를 out에 추가한다.
+    PICKING(k, src_stack, job_id) 후보를 out에 추가한다.
 
     Phase 4 변경:
       - 야드 top WIP뿐 아니라 버퍼 내 WIP도 PICKING 대상에 포함
-      - generic run(input_wip_id == 0)에 대해 첫 PICKING 후보를 탐색
+      - generic job(input_wip_id == 0)에 대해 첫 PICKING 후보를 탐색
       - same_spec 체크 정밀화 (_compat_p4 사용)
     """
     # ── (1) 야드 top WIP ──────────────────────────────────────
     accessible = state.accessible_wips()  # {stack_id → wip_id}
 
     for sid, wip_id in accessible.items():
-        _try_add_picking(state, wip_data, run_data, out,
+        _try_add_picking(state, wip_data, job_data, out,
                       wip_id=wip_id, src_stack=sid)
 
     # ── (2) 버퍼 내 WIP ───────────────────
@@ -310,19 +310,19 @@ def _add_picking_actions(
     for wip_id in state.buffer_wips:
         if wip_id in state.K_mach:
             continue
-        _try_add_picking(state, wip_data, run_data, out,
+        _try_add_picking(state, wip_data, job_data, out,
                       wip_id=wip_id, src_stack=None)
 
 
 def _try_add_picking(
     state: State,
     wip_data: Dict[int, WIPData],
-    run_data:  Dict[int, RunData],
+    job_data:  Dict[int, JobData],
     out:       List[Action],
     wip_id: int,
     src_stack,
 ) -> None:
-    """단일 WIP에 대해 PICKING 가능한 run 후보를 검색하여 out에 추가한다."""
+    """단일 WIP에 대해 PICKING 가능한 job 후보를 검색하여 out에 추가한다."""
     wip = wip_data.get(wip_id)
     if wip is None:
         return
@@ -332,25 +332,25 @@ def _try_add_picking(
     if wip.is_output_wip:
         return
 
-    for run_id, run in run_data.items():
-        if run_id not in state.Q_rem:
+    for job_id, job in job_data.items():
+        if job_id not in state.Q_rem:
             continue
 
         # compat 체크 (first-load 탐색 + same_spec 강화)
-        if not _compat_p4(wip_id, run_id, wip, run, state, wip_data):
+        if not _compat_p4(wip_id, job_id, wip, job, state, wip_data):
             continue
 
-        # run 일치 체크 (LOADING 중이면 q_mach와 같아야 함)
+        # job 일치 체크 (LOADING 중이면 j_mach와 같아야 함)
         if state.phase == MachinePhase.LOADING:
-            if run_id != state.q_mach:
+            if job_id != state.j_mach:
                 continue
 
         # capa 체크 (원자재 run은 capa 체크 없이 항상 PICKING 가능)
         new_u_short = state.u_short + wip.short_side
         new_u_long  = max(state.u_long, wip.long_side)
-        if new_u_short > run.cap_short:
+        if new_u_short > job.cap_short:
             continue
-        if new_u_long > run.cap_long:
+        if new_u_long > job.cap_long:
             continue
 
         out.append(Action(
@@ -358,7 +358,7 @@ def _try_add_picking(
                 type=CRANE_PICKING,
                 wip_id=wip_id,
                 src_stack=src_stack,
-                run_id=run_id,
+                job_id=job_id,
             ),
             prod=ProdAction(PROD_NONE),
         ))
@@ -366,32 +366,32 @@ def _try_add_picking(
 
 def _compat_p4(
     wip_id: int,
-    run_id: int,
+    job_id: int,
     wip:    WIPData,
-    run:    RunData,
+    job:    JobData,
     state:  State,
     wip_data: Dict[int, WIPData],
 ) -> bool:
     """
     EMPTY 상태 (첫 번째 PICKING):
-      - run.input_wip_id > 0 이면 해당 unique WIP만 허용
-      - run.input_wip_id == 0 이면 run template과 맞는 어떤 WIP든 허용
+      - job.input_wip_id > 0 이면 해당 unique WIP만 허용
+      - job.input_wip_id == 0 이면 job template과 맞는 어떤 WIP든 허용
 
     LOADING 상태 (추가 PICKING):
-      - run 일치 (q_mach == run_id) 는 호출 측에서 보장
+      - job 일치 (j_mach == job_id) 는 호출 측에서 보장
       - 기존 K_mach 내 WIP과 same_spec이어야 함
-      - 동시에 run template과도 맞아야 함
+      - 동시에 job template과도 맞아야 함
     """
     if state.phase == MachinePhase.EMPTY:
-        # 원자재 run (input_wip_id==0)은 DIRECT_START만 허용, PICKING 불가
-        if run.input_wip_id == 0:
+        # 원자재 job (input_wip_id==0)은 DIRECT_START만 허용, PICKING 불가
+        if job.input_wip_id == 0:
             return False
-        # unique run: 정확히 해당 WIP ID만 허용
-        return run.input_wip_id == wip_id
+        # unique job: 정확히 해당 WIP ID만 허용
+        return job.input_wip_id == wip_id
 
     # LOADING: 추가 PICKING — K_mach 내 모든 WIP과 same_spec 체크
     if state.phase == MachinePhase.LOADING:
-        if not _matches_run_template(wip, run):
+        if not _matches_job_template(wip, job):
             return False
         for existing_wid in state.K_mach:
             existing_wip = wip_data.get(existing_wid)
@@ -406,29 +406,25 @@ def _compat_p4(
 
 def _same_spec(wip1: WIPData, wip2: WIPData) -> bool:
     """
-    두 WIP의 규격 동일 여부
-    동일 grade + 두께/단변/장변이 허용 오차 이내
+    두 WIP의 규격 동일 여부 (Phase 5 기준)
+    동일 grade + 두께(±0.1mm) 만 체크.
+    가로/세로(단변·장변)는 설비 Capa 체크(_try_add_picking의 cap_short/cap_long)로 처리.
     """
     if wip1.grade != wip2.grade:
         return False
-    if abs(wip1.thickness  - wip2.thickness)  > 0.1:
-        return False
-    if abs(wip1.short_side - wip2.short_side) > 1.0:
-        return False
-    if abs(wip1.long_side  - wip2.long_side)  > 1.0:
+    if abs(wip1.thickness - wip2.thickness) > 0.1:
         return False
     return True
 
 
-def _matches_run_template(wip: WIPData, run: RunData) -> bool:
-    """WIP가 run이 요구하는 규격/재질 template과 일치하는지 검사한다."""
-    if wip.grade != run.grade:
+def _matches_job_template(wip: WIPData, job: JobData) -> bool:
+    """
+    WIP이 job이 요구하는 규격/재질 template과 일치하는지 검사한다.
+    Phase 5: grade + 두께만 체크. 가로/세로는 설비 Capa 체크로 위임.
+    """
+    if wip.grade != job.grade:
         return False
-    if abs(wip.thickness - run.thickness) > 0.1:
-        return False
-    if abs(wip.short_side - run.short_side) > 1.0:
-        return False
-    if abs(wip.long_side - run.long_side) > 1.0:
+    if abs(wip.thickness - job.thickness) > 0.1:
         return False
     return True
 
@@ -439,7 +435,7 @@ def _matches_run_template(wip: WIPData, run: RunData) -> bool:
 
 def _add_start_process_actions(
     state:    State,
-    run_data: Dict[int, RunData],
+    job_data: Dict[int, JobData],
     out:      List[Action],
 ) -> None:
     """
@@ -447,15 +443,15 @@ def _add_start_process_actions(
     조건 (Section 7.6):
       - m_t = LOADING
       - K_mach ≠ ∅
-      - q = q_mach
+      - q = j_mach
     """
     if (state.phase == MachinePhase.LOADING
             and len(state.K_mach) > 0
-            and state.q_mach is not None):
-        q = state.q_mach
+            and state.j_mach is not None):
+        q = state.j_mach
         out.append(Action(
             crane=CraneAction(CRANE_WAIT),
-            prod=ProdAction(PROD_START, run_id=q),
+            prod=ProdAction(PROD_START, job_id=q),
         ))
 
 
@@ -468,7 +464,7 @@ def _add_store_actions(
     out:   List[Action],
 ) -> None:
     """
-    STORE(k, dst_stack, run_id) 후보를 out에 추가한다.
+    STORE(k, dst_stack, job_id) 후보를 out에 추가한다.
     조건:
       - m_t = BLOCKED
       - k ∈ O_wait
@@ -488,36 +484,36 @@ def _add_store_actions(
                 type=CRANE_STORE,
                 wip_id=k,
                 dst_stack=dst,
-                run_id=state.q_mach,
+                job_id=state.j_mach,
             ),
             prod=ProdAction(PROD_NONE),
         ))
 
 
 # ─────────────────────────────────────────────────────────────────
-# 내부: DIRECT_START 후보 생성 (원자재 run 전용)
+# 내부: DIRECT_START 후보 생성 (원자재 job 전용)
 # ─────────────────────────────────────────────────────────────────
 
 def _add_direct_start_actions(
     state:    State,
-    run_data: Dict[int, RunData],
+    job_data: Dict[int, JobData],
     out:      List[Action],
 ) -> None:
     """
     EMPTY 상태에서 야드에 PICKING 가능한 WIP이 없을 때,
     has_external_input=True인 원자재 run에 대해 DIRECT_START 후보를 추가한다.
 
-    DIRECT_START: crane=WAIT (이동 없음), prod=DIRECT_START(run_id)
+    DIRECT_START: crane=WAIT (이동 없음), prod=DIRECT_START(job_id)
     전이 효과: EMPTY → BUSY (K_mach=∅, u_short=cap_short, u_long=cap_long)
     """
     if state.phase != MachinePhase.EMPTY:
         return
-    for run_id, run in run_data.items():
-        if run_id not in state.Q_rem:
+    for job_id, job in job_data.items():
+        if job_id not in state.Q_rem:
             continue
-        if not run.has_external_input:
+        if not job.has_external_input:
             continue
         out.append(Action(
             crane=CraneAction(CRANE_WAIT),
-            prod=ProdAction(PROD_DIRECT_START, run_id=run_id),
+            prod=ProdAction(PROD_DIRECT_START, job_id=job_id),
         ))

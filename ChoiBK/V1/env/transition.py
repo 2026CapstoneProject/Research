@@ -2,7 +2,7 @@
 전이 함수: S_{t+1} = S^M(S_t, x_t, W_{t+1})
 
 가정:
-  - output WIP은 unique하게 생성·적재되지만, 후속 run 입력으로 재사용되지는 않는다.
+  - output WIP은 unique하게 생성·적재되지만, 후속 job 입력으로 재사용되지는 않는다.
 """
 
 from typing import Dict, Optional
@@ -10,7 +10,7 @@ import numpy as np
 from data.params import (
     DELTA_MIN, SHIFT_END, STACK_TO_NODE, MACHINE_NODE, SIGMA_PTIME
 )
-from data.loader import WIPData, RunData, get_crane_time
+from data.loader import WIPData, JobData, get_crane_time
 from env.state import State, MachinePhase
 from env.actions import (
     Action, CraneAction, ProdAction,
@@ -122,7 +122,7 @@ def transition(
     state: State,
     action: Action,
     wip_data: Dict[int, WIPData],
-    run_data:  Dict[int, RunData],
+    job_data:  Dict[int, JobData],
     inter_times: Dict,
     machine_times: Dict,
 ) -> State:
@@ -136,7 +136,7 @@ def transition(
     tau   = get_tau(crane, state, inter_times, machine_times)
 
     # ── (1) 설비 상태 전이 ────────────────────────────
-    _update_machine(s, crane, prod, tau, wip_data, run_data)
+    _update_machine(s, crane, prod, tau, wip_data, job_data)
 
     # ── (2) 야드 상태 전이 ────────────────────────────
     _update_yard(s, crane)
@@ -162,10 +162,10 @@ def _update_machine(
     prod:  ProdAction,
     tau:   float,
     wip_data: Dict[int, WIPData],
-    run_data:  Dict[int, RunData],
+    job_data:  Dict[int, JobData],
 ) -> None:
     """
-    K_mach, q_mach, u_short, u_long, eta, phase, O_wait, Q_rem, Q_done 갱신
+    K_mach, j_mach, u_short, u_long, eta, phase, O_wait, Q_rem, Q_done 갱신
     """
     m = s   # 직접 수정
 
@@ -175,33 +175,33 @@ def _update_machine(
         m.eta = new_eta
         if m.eta == 0.0:
             # 생산 완료
-            q = m.q_mach
-            run = run_data.get(q) if q is not None else None
+            q = m.j_mach
+            job = job_data.get(q) if q is not None else None
             m.K_mach = frozenset()
             m.u_short = 0.0
             m.u_long  = 0.0
-            # Q_rem에서 제거, Q_done에 추가 (BLOCKED 진입 시점에 run 소비 완료)
+            # Q_rem에서 제거, Q_done에 추가 (BLOCKED 진입 시점에 job 소비 완료)
             if q in m.Q_rem:
                 m.Q_rem  = m.Q_rem  - {q}
                 m.Q_done = m.Q_done | {q}
-            if run is not None and run.generates_output and run.output_wip_id is not None:
+            if job is not None and job.generates_output and job.output_wip_id is not None:
                 m.phase = MachinePhase.BLOCKED
-                m.O_wait = m.O_wait | {run.output_wip_id}
+                m.O_wait = m.O_wait | {job.output_wip_id}
             else:
                 m.phase = MachinePhase.EMPTY
-                m.q_mach = None
+                m.j_mach = None
         return   # BUSY 상태에서는 아래 로직 실행 안 함
 
     # ── PICKING 처리 ─────────────────
     if crane.type == CRANE_PICKING:
         k    = crane.wip_id
-        q    = crane.run_id
+        q    = crane.job_id
         wip  = wip_data[k]
 
         if m.phase == MachinePhase.EMPTY:
             # case 1: 빈 설비에 첫 PICKING → LOADING으로 전환
             m.K_mach  = frozenset([k])
-            m.q_mach  = q
+            m.j_mach  = q
             m.u_short = wip.short_side
             m.u_long  = wip.long_side
             m.phase   = MachinePhase.LOADING
@@ -211,16 +211,16 @@ def _update_machine(
             m.K_mach  = m.K_mach | {k}
             m.u_short = m.u_short + wip.short_side
             m.u_long  = max(m.u_long, wip.long_side)
-            # q_mach 유지 (Section 7.5: q == q_mach 보장됨)
+            # j_mach 유지 (Section 7.5: q == j_mach 보장됨)
 
         return
 
     # ── START_PROCESS 처리 ────────────
     if prod.type == PROD_START and m.phase == MachinePhase.LOADING:
-        q = prod.run_id
-        run = run_data[q]
+        q = prod.job_id
+        job = job_data[q]
         m.phase = MachinePhase.BUSY
-        ptime = run.process_time   # p_{q_t^mach}
+        ptime = job.process_time   # p_{q_t^mach}
         # 확률적 생산시간: ω_{t+1}^ptime ~ N(0, σ) (SDAM Section 3.2)
         if _stochastic_mode and SIGMA_PTIME > 0.0:
             noise = np.random.normal(0.0, SIGMA_PTIME)
@@ -228,17 +228,17 @@ def _update_machine(
         m.eta = ptime
         return
 
-    # ── DIRECT_START 처리 (원자재 run: EMPTY → BUSY 직접 전이) ──
+    # ── DIRECT_START 처리 (원자재 job: EMPTY → BUSY 직접 전이) ──
     # 크레인 PICKING 없이 바로 가공 시작. K_mach는 비워두고 cap 값으로 설정.
     if prod.type == PROD_DIRECT_START and m.phase == MachinePhase.EMPTY:
-        q   = prod.run_id
-        run = run_data[q]
+        q   = prod.job_id
+        job = job_data[q]
         m.phase   = MachinePhase.BUSY
-        m.q_mach  = q
+        m.j_mach  = q
         m.K_mach  = frozenset()        # 물리적 WIP 추적 없음 (원자재)
-        m.u_short = run.cap_short      # 배치 용량 전체 사용으로 간주
-        m.u_long  = run.cap_long
-        ptime = run.process_time
+        m.u_short = job.cap_short      # 배치 용량 전체 사용으로 간주
+        m.u_long  = job.cap_long
+        ptime = job.process_time
         if _stochastic_mode and SIGMA_PTIME > 0.0:
             noise = np.random.normal(0.0, SIGMA_PTIME)
             ptime = max(DELTA_MIN, ptime + noise)
@@ -252,7 +252,7 @@ def _update_machine(
         if len(m.O_wait) == 0:
             # 모든 출력재 적재 완료 → EMPTY로 전환
             m.phase  = MachinePhase.EMPTY
-            m.q_mach = None
+            m.j_mach = None
         return   # BLOCKED 상태의 STORE는 여기서 끝
 
     # ── otherwise: 상태 유지 (LOADING 유지·BLOCKED 대기) ──────
