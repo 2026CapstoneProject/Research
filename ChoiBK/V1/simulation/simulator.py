@@ -1,8 +1,3 @@
-"""
-V5 Phase5 시뮬레이션 드라이버
-에피소드 전체를 실행하고 로그를 반환한다.
-"""
-
 import os
 from datetime import datetime
 from typing import Callable, Dict, List, Optional
@@ -119,14 +114,13 @@ def run_episode(
 
         s = s_next
 
-    # ── Terminal cost ─────────────────────────────────────────
+    # Terminal cost
     t_cost = terminal_cost(s, job_data=job_data)
     t_line = f"\nTerminal cost: {t_cost:.2f}"
     if verbose:
         print(t_line)
     step_lines.append(t_line)
 
-    # ── 파일 저장 ─────────────────────────────────────────────
     if output_path is not None:
         _save_result(
             output_path, log, wip_data, job_data,
@@ -152,9 +146,9 @@ def _print_step(step: int, state: State, action: Action, cost: float, tau: float
 
 
 def _build_summary_lines(log: List[dict], job_data: Optional[Dict[int, JobData]] = None) -> List[str]:
-    """에피소드 요약 문자열 리스트 생성 (출력·저장 공용)"""
+    
     if not log:
-        return ["로그가 비어있습니다."]
+        return ["로그가 비어있음"]
 
     summary = episode_summary(log, job_data=job_data)
 
@@ -200,10 +194,7 @@ def print_summary(log: List[dict], job_data: Optional[Dict[int, JobData]] = None
         print(line)
 
 
-# ─────────────────────────────────────────────────────────────────
 # 결과 파일 저장
-# ─────────────────────────────────────────────────────────────────
-
 def _save_result(
     output_path: str,
     log:         List[dict],
@@ -245,7 +236,7 @@ def _save_result(
         "",
     ]
 
-    # ── Job 입력재 정보 ───────────────────────────────────────
+    # Job 입력재 정보
     lines += [h2("Job 목록 및 입력재"), ""]
     if is_md:
         lines += [
@@ -272,7 +263,7 @@ def _save_result(
             )
     lines.append("")
 
-    # ── 적재 순서 요약 ────────────────────────────────────────
+    # 적재 순서 요약
     lines += [h2("크레인 적재 순서 (PICKING 이벤트)"), ""]
     picking_entries = [e for e in log if e["action"].crane.type == "PICKING"]
     if is_md:
@@ -305,7 +296,7 @@ def _save_result(
             )
     lines.append("")
 
-    # ── Run별 배치 결과 ───────────────────────────────────────
+    # Run별 배치 결과
     lines += [h2("Run별 배치 투입 결과"), ""]
     start_entries = [e for e in log if e["action"].prod.type == "START_PROCESS"]
     if is_md:
@@ -342,7 +333,7 @@ def _save_result(
             )
     lines.append("")
 
-    # ── 이동 이력 (MOVE / TEMP_MOVE / RESTORE) ──────────────
+    # 이동 이력 (MOVE / TEMP_MOVE / RESTORE)
     move_entries = [
         e for e in log
         if e["action"].crane.type in (
@@ -379,9 +370,7 @@ def _save_result(
         lines.append("  (재배치 없음)")
     lines.append("")
 
-    # ── 전체 스텝 로그 ────────────────────────────────────────
-    # step_lines 구조: [스텝 로그 len(log)줄] + [에피소드종료 4줄] + [terminal cost 1줄]
-    # zip 길이가 len(log)에서 끊기므로, 접미 줄을 미리 분리해야 유실되지 않는다.
+    # 전체 스텝 로그
     n_step_lines = len(log)
     step_log_lines  = step_lines[:n_step_lines]    # 스텝별 로그
     step_tail_lines = step_lines[n_step_lines:]    # 에피소드종료 + terminal cost
@@ -404,7 +393,7 @@ def _save_result(
         lines.append("```")
     lines.append("")
 
-    # ── 에피소드 요약 통계 ────────────────────────────────────
+    # 에피소드 요약 통계
     lines += [h2("에피소드 요약 통계"), ""]
     if len(filtered_log) != len(log):
         lines += [
@@ -414,17 +403,13 @@ def _save_result(
         ]
     lines += _build_summary_lines(log, job_data=job_data)
 
-    # ── 파일 쓰기 ─────────────────────────────────────────────
+
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
 
 def _is_unmanned_wait_step(entry: dict) -> bool:
-    """
-    결과 md에서는 무인가공 구간의 단순 WAIT step을 생략한다.
-    설비가 BUSY이든 EMPTY이든 무인가공 시간대이고 크레인이 WAIT이면 대상이다.
-    """
     state_before = entry["state_before"]
     action = entry["action"]
     return (

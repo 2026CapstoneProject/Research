@@ -45,7 +45,7 @@ def greedy_policy(
 
     phase = state.phase
 
-    # ── 우선순위 1: BLOCKED → STORE ──────────────────────────
+    # 우선순위 1: BLOCKED → STORE 
     if phase == MachinePhase.BLOCKED:
         stores = [a for a in feasible if a.crane.type == CRANE_STORE]
         if stores:
@@ -59,7 +59,7 @@ def greedy_policy(
         if restore is not None:
             return restore
 
-    # ── 우선순위 2: LOADING + batch 꽉 참 → START_PROCESS ────
+    #  우선순위 2: LOADING + batch 꽉 참 → START_PROCESS 
     if phase == MachinePhase.LOADING and state.j_mach is not None:
         q = state.j_mach
         job = job_data.get(q)
@@ -68,7 +68,7 @@ def greedy_policy(
             if starts:
                 return starts[0]
 
-    # ── 우선순위 3: PICKING 탐색 ────────────────────────────────
+    #  우선순위 3: PICKING 탐색 
     # EMPTY에서도 "어떤 WIP + 어떤 job 조합으로 시작할지" 점수화한다.
     pickings = [a for a in feasible if a.crane.type == CRANE_PICKING]
     if pickings:
@@ -85,13 +85,13 @@ def greedy_policy(
             return 10.0 * short_fill + 6.0 * long_fill
         return max(pickings, key=picking_score)
 
-    # ── 우선순위 4: START_PROCESS ──────────────────────────────
+    #  우선순위 4: START_PROCESS
     if phase == MachinePhase.LOADING and len(state.K_mach) >= 1:
         starts = [a for a in feasible if a.prod.type == PROD_START]
         if starts:
             return starts[0]
 
-    # ── 우선순위 4.5: EMPTY + PICKING 없음 → DIRECT_START 또는 idle marshalling ─
+    #  우선순위 4.5: EMPTY + PICKING 없음 → DIRECT_START 또는 idle marshalling
     if phase == MachinePhase.EMPTY and not pickings:
         # 4.5a: 원자재 job DIRECT_START (야드 조작 불필요)
         direct_starts = [a for a in feasible if a.prod.type == PROD_DIRECT_START]
@@ -108,13 +108,13 @@ def greedy_policy(
         if idle_move is not None:
             return idle_move
 
-    # ── 우선순위 5: BUSY 중 pre-marshalling ──────────────────
+    #  우선순위 5: BUSY 중 pre-marshalling 
     if phase == MachinePhase.BUSY:
         move_action = _best_marshalling_action(state, wip_data, job_data, feasible)
         if move_action is not None:
             return move_action
 
-    # ── 우선순위 6: WAIT ──────────────────────────────────────
+    #  우선순위 6: WAIT 
     waits = [a for a in feasible if a.crane.type == CRANE_WAIT]
     return waits[0] if waits else feasible[0]
 
@@ -143,7 +143,7 @@ def _best_marshalling_action(
         if job and job.input_wip_id > 0:
             needed_wips.add(job.input_wip_id)
 
-    # ── 1. blocker 탐색 (TEMP_MOVE / MOVE) ───────────────────
+    # 1. blocker 탐색 (TEMP_MOVE / MOVE)
     blockers_to_move: Set[int] = set()
     if needed_wips:
         for sid, stack in state.stacks.items():
@@ -172,7 +172,7 @@ def _best_marshalling_action(
     if moves:
         return moves[0]
 
-    # ── 2. PRE_POSITION — 버퍼의 needed_wip 전략 선배치 ──────
+    # 2. PRE_POSITION — 버퍼의 needed_wip 전략 선배치
     pre_pos = [
         a for a in feasible
         if a.crane.type == CRANE_PRE_POSITION
@@ -184,7 +184,7 @@ def _best_marshalling_action(
             return len(state.stacks.get(a.crane.dst_stack, []))
         return min(pre_pos, key=pre_score)
 
-    # ── 3. RESTORE — 방어적 버퍼 복원 ───────────────────────
+    # 3. RESTORE — 방어적 버퍼 복원
     # 버퍼가 꽉 찼거나, 남은 job이 없을 때만 RESTORE를 적극 수행한다.
     # 그렇지 않으면 불필요한 복원으로 future blocker를 다시 만들 수 있어 WAIT이 낫다.
     if state.buffer_cap == 0 or len(state.Q_rem) == 0:
