@@ -1,6 +1,6 @@
 """
-V5 Phase3 DIDPPy 솔버 래퍼
-V5_Coding_Plan.md Section 7 참조
+DIDPPy 솔버 래퍼
+
 
 CABS (Cost-Algebraic Beam Search): Anytime 알고리즘, 시간 제한 내 최선 해
 CAASDy: 빠른 근사 해, 실시간 응답이 필요할 때

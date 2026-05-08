@@ -1,7 +1,7 @@
 """
-V5 Phase5 데이터 로더
+데이터 로더
 
-Phase 5 핵심 가정:
+핵심 가정:
   1. input_wip_id == 0 인 run은 모두 원자재(raw material) run이다.
      원자재는 동일 규격으로 여러 장이 있을 수 있으며, 인벤토리 WIP을 크레인으로 LOAD하지 않고
      DIRECT_START로 즉시 가공을 시작한다. has_external_input = True (항상).
@@ -214,8 +214,7 @@ def load_all(data_dir: str) -> Tuple[
             output_wip_id=out_wid,
         )
 
-    # ── has_external_input 결정 ──────────────────────────────────
-    # Phase 5 가정:
+    # 가정:
     #   - 원자재 job (input_wip_id=0): 항상 외부 공급 → has_external_input = True
     #     (동일 규격 원자재가 여러 장 존재할 수 있으므로 인벤토리 체크 불필요)
     #   - unique job (input_wip_id>0): 초기 인벤토리에 없으면 외부 원자재
@@ -230,7 +229,6 @@ def load_all(data_dir: str) -> Tuple[
         else:
             job.has_external_input = job.input_wip_id not in initial_wids
 
-    # ── is_output_wip 마킹 ───────────────────────────────────────
     # Phase 5: generates_output=True 런의 출력재는 후속 런의 입력으로 재사용되지 않는다.
     # 해당 WIP를 PICKING 후보에서 제외하기 위해 플래그를 설정한다.
     for job in job_data.values():

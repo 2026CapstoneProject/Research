@@ -1,19 +1,10 @@
 """
-V5 Phase5 DIDPPy 모델 빌더
-V5_SDAM.md Section 11 + V5_Coding_Plan.md Section 6 참조
-
-Phase 5 변경사항:
+DIDPPy 모델 빌더
   - 원자재 job (input_wip_id == 0): PICKING 전이 미생성 (DIRECT_START는 DyPDL 외 greedy 처리)
   - 출력재 WIP (is_output_wip == True): PICKING 전이 미생성 (후속 런 재사용 불가)
   - 남은 run이 모두 원자재이면 build_didp_model() = None → greedy fallback 유도
   - output_wip_id는 STORE 후 accessible에 추가되나 PICKING 대상에서 제외됨
 
-Phase 2/3 변경사항 (Phase 1 대비):
-  - buf_cap int_var 추가 (잔여 버퍼 용량)
-  - MOVE(wi) 전이 추가 (BUSY 중 영구 재배치, cost = C_REL)
-  - TEMP_MOVE(wi) 전이 추가 (BUSY 중 버퍼 임시이동, cost = C_TEMP, buf_cap 감소)
-  - PICKING 전이: 버퍼 내 WIP도 accessible로 포함 (초기 accessible에 buffer_wips 합산)
-  - same_spec 기반 PICKING 제약은 feasibility.py에서 처리, DyPDL 모델은 단순화 유지
 
 DyPDL에서 MOVE/TEMP_MOVE의 핵심 효과:
   MOVE(wi)      : accessible.add(next_table[wi])   — wi 아래 WIP 노출
@@ -86,17 +77,14 @@ def build_didp_model(
     """
     현재 상태 S_t를 DIDPPy Model로 변환한다.
 
-    Phase 4 추가 상태변수 (Phase 2/3에서 도입):
       buf_cap : int_var — 잔여 버퍼 용량
 
-    Phase 4 추가 전이 (Phase 2/3에서 도입):
       MOVE_{wi}      : BUSY 중 wi를 영구 이동 → accessible에 next_table[wi] 추가
       TEMP_MOVE_{wi} : BUSY 중 wi를 버퍼 임시이동 → accessible에 next_table[wi] 추가, buf_cap 감소
     """
     if not DIDP_AVAILABLE:
         return None
 
-    # ── 인덱스 매핑 ──────────────────────────────────────────
     active_job_ids: List[int] = sorted(state.Q_rem)
     n_runs = len(active_job_ids)
     if n_runs == 0:
@@ -136,7 +124,6 @@ def build_didp_model(
         wip_type = model.add_object_type(number=n_wips + 1)
         run_type = model.add_object_type(number=n_runs)
 
-        # ── 상태변수 등록 ────────────────────────────────────────
         k_mach_init = [wip_idx[w] for w in state.K_mach if w in wip_idx]
         K_mach = model.add_set_var(object_type=wip_type, target=k_mach_init)
 
@@ -169,7 +156,6 @@ def build_didp_model(
 
         empty_wips = model.create_set_const(object_type=wip_type, value=[])
 
-        # ── 파라미터 테이블 ──────────────────────────────────────
         s_table = model.add_float_table(
             [wip_data[wid].short_side for wid in active_wip_ids]
         )
@@ -194,7 +180,6 @@ def build_didp_model(
             [next_acc.get(wid, SENTINEL) for wid in active_wip_ids]
         )
 
-        # ── Base case ─────────────────────────────────────────────
         model.add_base_case(
             [steps_left <= 0, phase == PHASE_EMPTY],
             cost=_terminal_expr(Q_rem, K_mach, buffered, phase, n_runs, n_wips)
@@ -219,7 +204,6 @@ def build_didp_model(
             cost=0.0
         )
 
-        # ── 전이 등록 ──────────────────────────────────────────────
         # 1. WAIT
         _add_wait_transition(
             model, n_runs, phase, eta_discrete, steps_left,
@@ -298,9 +282,7 @@ def build_didp_model(
     return model
 
 
-# ─────────────────────────────────────────────────────────────────
 # 전이 정의 헬퍼들
-# ─────────────────────────────────────────────────────────────────
 
 def _add_wait_transition(
     model, n_runs: int, phase, eta_discrete, steps_left,
@@ -570,7 +552,7 @@ def _add_pre_position_transition(
     phase, steps_left, buf_cap, buffered,
 ):
     """
-    PRE_POSITION(wi): 버퍼의 needed_wip을 미래 PICKING 최적 위치로 선배치 (Phase 3 신규).
+    PRE_POSITION(wi): 버퍼의 needed_wip을 미래 PICKING 최적 위치로 선배치 (신규).
 
     RESTORE와 DyPDL 효과는 동일 (buffered 제거, buf_cap+1, accessible 추가).
     단, 전제조건이 다르다:
@@ -598,9 +580,7 @@ def _add_pre_position_transition(
     model.add_transition(t)
 
 
-# ─────────────────────────────────────────────────────────────────
 # 보조 함수 (Phase 1과 동일)
-# ─────────────────────────────────────────────────────────────────
 
 def _terminal_expr(Q_rem, K_mach, buffered, phase, n_runs, n_wips):
     """
@@ -617,7 +597,7 @@ def compute_relevant_wip_ids(
     active_job_ids: List[int],
 ) -> List[int]:
     """
-    Phase 2 lookahead에서 추적해야 할 WIP 집합을 계산한다.
+    lookahead에서 추적해야 할 WIP 집합을 계산한다.
 
     포함 대상:
       - 각 남은 run의 input WIP

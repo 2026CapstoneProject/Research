@@ -1,5 +1,5 @@
 """
-V5 Phase5 시뮬레이션 드라이버
+시뮬레이션 드라이버
 에피소드 전체를 실행하고 로그를 반환한다.
 """
 
@@ -68,7 +68,6 @@ def run_episode(
             step_lines.extend(end_lines)
             break
 
-        # ── 정책 호출 ──────────────────────────────────────────
         action, lh_cost = policy(s, wip_data, job_data, machine_times)
 
         # 무인가공 시간대 WAIT|NONE 상태: 다음 사이클에서 할 수 있는 run이
@@ -92,16 +91,12 @@ def run_episode(
             step_lines.extend(end_lines)
             break
 
-        # ── 소요시간 계산 ──────────────────────────────────────
         tau = get_tau(action.crane, s, inter_times, machine_times)
 
-        # ── 비용 계산 ─────────────────────────────────────────
         cost = step_cost(s, action, job_data, tau)
 
-        # ── 상태 전이 ─────────────────────────────────────────
         s_next = transition(s, action, wip_data, job_data, inter_times, machine_times)
 
-        # ── 로그 ─────────────────────────────────────────────
         log.append({
             "step":           step_num,
             "state_before":   s,
@@ -119,14 +114,12 @@ def run_episode(
 
         s = s_next
 
-    # ── Terminal cost ─────────────────────────────────────────
     t_cost = terminal_cost(s, job_data=job_data)
     t_line = f"\nTerminal cost: {t_cost:.2f}"
     if verbose:
         print(t_line)
     step_lines.append(t_line)
 
-    # ── 파일 저장 ─────────────────────────────────────────────
     if output_path is not None:
         _save_result(
             output_path, log, wip_data, job_data,
@@ -200,9 +193,7 @@ def print_summary(log: List[dict], job_data: Optional[Dict[int, JobData]] = None
         print(line)
 
 
-# ─────────────────────────────────────────────────────────────────
 # 결과 파일 저장
-# ─────────────────────────────────────────────────────────────────
 
 def _save_result(
     output_path: str,
@@ -229,14 +220,13 @@ def _save_result(
     lines: List[str] = []
 
     def h1(text):  return f"# {text}" if is_md else f"\n{'=' * 60}\n{text}\n{'=' * 60}"
-    def h2(text):  return f"## {text}" if is_md else f"\n{'─' * 40}\n{text}"
     def h3(text):  return f"### {text}" if is_md else f"\n[{text}]"
     def bold(text): return f"**{text}**" if is_md else text
     def code(text): return f"`{text}`" if is_md else text
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     lines += [
-        h1("V5 Phase5 시뮬레이션 결과"),
+        h1("시뮬레이션 결과"),
         "",
         f"- 실행 시각: {now}",
         f"- 총 WIP 수: {sum(len(v) for v in log[0]['state_before'].stacks.values()) if log else 'N/A'}",
@@ -245,7 +235,6 @@ def _save_result(
         "",
     ]
 
-    # ── Job 입력재 정보 ───────────────────────────────────────
     lines += [h2("Job 목록 및 입력재"), ""]
     if is_md:
         lines += [
@@ -272,7 +261,6 @@ def _save_result(
             )
     lines.append("")
 
-    # ── 적재 순서 요약 ────────────────────────────────────────
     lines += [h2("크레인 적재 순서 (PICKING 이벤트)"), ""]
     picking_entries = [e for e in log if e["action"].crane.type == "PICKING"]
     if is_md:
@@ -305,7 +293,6 @@ def _save_result(
             )
     lines.append("")
 
-    # ── Run별 배치 결과 ───────────────────────────────────────
     lines += [h2("Run별 배치 투입 결과"), ""]
     start_entries = [e for e in log if e["action"].prod.type == "START_PROCESS"]
     if is_md:
@@ -342,7 +329,6 @@ def _save_result(
             )
     lines.append("")
 
-    # ── 이동 이력 (MOVE / TEMP_MOVE / RESTORE) ──────────────
     move_entries = [
         e for e in log
         if e["action"].crane.type in (
@@ -379,7 +365,6 @@ def _save_result(
         lines.append("  (재배치 없음)")
     lines.append("")
 
-    # ── 전체 스텝 로그 ────────────────────────────────────────
     # step_lines 구조: [스텝 로그 len(log)줄] + [에피소드종료 4줄] + [terminal cost 1줄]
     # zip 길이가 len(log)에서 끊기므로, 접미 줄을 미리 분리해야 유실되지 않는다.
     n_step_lines = len(log)
@@ -404,7 +389,6 @@ def _save_result(
         lines.append("```")
     lines.append("")
 
-    # ── 에피소드 요약 통계 ────────────────────────────────────
     lines += [h2("에피소드 요약 통계"), ""]
     if len(filtered_log) != len(log):
         lines += [
@@ -414,7 +398,6 @@ def _save_result(
         ]
     lines += _build_summary_lines(log, job_data=job_data)
 
-    # ── 파일 쓰기 ─────────────────────────────────────────────
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

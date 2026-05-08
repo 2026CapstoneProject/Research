@@ -5,7 +5,7 @@
   - generates_output=True 런의 출력재(is_output_wip=True)는 PICKING 후보에서 영구 제외.
   - DIRECT_START는 PICKING 유무와 무관하게 EMPTY 상태에서 항상 후보로 추가.
   - idle/busy marshalling의 generic job 블로커 탐색 제거 (원자재 run은 야드 WIP 불필요).
-  Section 7.7  PRE_POSITION 허용 — BUSY 중 버퍼 WIP을 미래 PICKING 최적 위치로 선배치
+    PRE_POSITION 허용 — BUSY 중 버퍼 WIP을 미래 PICKING 최적 위치로 선배치
                조건: 해당 버퍼 WIP이 Q_rem의 어떤 unique run의 input_wip_id인 경우만 생성
                전략: WIP 수 최소 스택을 선택 (최상단 즉시 접근 보장)
                greedy 우선순위: PRE_POSITION > RESTORE
@@ -24,9 +24,7 @@ from env.actions import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────
 # 공개 API
-# ─────────────────────────────────────────────────────────────────
 
 def get_feasible_actions(
     state: State,
@@ -59,20 +57,17 @@ def get_feasible_actions(
 
     actions: List[Action] = []
 
-    # ── BLOCKED: STORE만 허용 ──────────────────
     if phase == MachinePhase.BLOCKED:
         _add_store_actions(state, actions)
         actions.append(WAIT_NONE)
         return actions
 
-    # ── BUSY: 재배치 행동 허용 ──────────────────
     # Phase 2: MOVE / TEMP_MOVE / RESTORE 추가
     if phase == MachinePhase.BUSY:
         _add_marshalling_actions(state, wip_data, job_data, actions)
         actions.append(WAIT_CONTINUE)
         return actions
 
-    # ── EMPTY / LOADING: PICKING 또는 START_PROCESS ─────────────
     if phase in (MachinePhase.EMPTY, MachinePhase.LOADING):
         _add_picking_actions(state, wip_data, job_data, actions)
         _add_start_process_actions(state, job_data, actions)
@@ -98,9 +93,7 @@ def get_feasible_actions(
     return actions if actions else [WAIT_NONE]
 
 
-# ─────────────────────────────────────────────────────────────────
 # 재배치 행동 (BUSY 중 pre-marshalling)
-# ─────────────────────────────────────────────────────────────────
 
 def _add_marshalling_actions(
     state:    State,
@@ -113,7 +106,7 @@ def _add_marshalling_actions(
 
     MOVE(k, src, dst)        : WIP k를 src 스택에서 dst 스택으로 영구 이동 (C^rel 비용)
     TEMP_MOVE(k, src)        : WIP k를 버퍼로 임시 이동 (C^temp 비용, buffer_cap >= 1)
-    PRE_POSITION(k, dst)     : 버퍼 WIP k를 미래 PICKING 최적 스택으로 선배치 (Phase 3 신규)
+    PRE_POSITION(k, dst)     : 버퍼 WIP k를 미래 PICKING 최적 스택으로 선배치 (신규)
                                조건: k가 Q_rem의 어떤 run의 input_wip_id일 때만 허용
                                대상 스택: WIP 수 최소 스택 (최상단 즉시 노출 보장)
     RESTORE(k, dst)          : 버퍼 WIP k를 임의 스택으로 복원 (방어적, 비용 0)
@@ -131,7 +124,6 @@ def _add_marshalling_actions(
         if jid in job_data and job_data[jid].input_wip_id > 0
     }
 
-    # ── MOVE / TEMP_MOVE ──────────────────────────────────────
     for src_sid, wip_id in accessible.items():
         if wip_id in state.K_mach:
             continue
@@ -161,7 +153,6 @@ def _add_marshalling_actions(
                 prod=ProdAction(PROD_CONTINUE),
             ))
 
-    # ── PRE_POSITION ───────────────────────────
     # 버퍼 WIP 중 미래 run의 input_wip인 것만 전략적 선배치
     if needed_wips:
         # 전략 스택: WIP 수가 가장 적은 스택 (최상단 즉시 노출 보장)
@@ -183,7 +174,6 @@ def _add_marshalling_actions(
                     prod=ProdAction(PROD_CONTINUE),
                 ))
 
-    # ── RESTORE ────────────────────────────────────────────────
     # 버퍼 내 WIP을 yard 스택으로 복원 (방어적 — 버퍼 공간 확보)
     for wip_id in state.buffer_wips:
         for dst_sid in state.stacks.keys():
@@ -280,9 +270,7 @@ def _add_idle_marshalling_actions(
             ))
 
 
-# ─────────────────────────────────────────────────────────────────
 # 내부: PICKING 후보 생성 (버퍼 WIP 포함, same_spec 강화)
-# ─────────────────────────────────────────────────────────────────
 
 def _add_picking_actions(
     state: State,
@@ -293,19 +281,17 @@ def _add_picking_actions(
     """
     PICKING(k, src_stack, job_id) 후보를 out에 추가한다.
 
-    Phase 4 변경:
+    변경:
       - 야드 top WIP뿐 아니라 버퍼 내 WIP도 PICKING 대상에 포함
       - generic job(input_wip_id == 0)에 대해 첫 PICKING 후보를 탐색
       - same_spec 체크 정밀화 (_compat_p4 사용)
     """
-    # ── (1) 야드 top WIP ──────────────────────────────────────
     accessible = state.accessible_wips()  # {stack_id → wip_id}
 
     for sid, wip_id in accessible.items():
         _try_add_picking(state, wip_data, job_data, out,
                       wip_id=wip_id, src_stack=sid)
 
-    # ── (2) 버퍼 내 WIP ───────────────────
     # 버퍼 WIP은 src_stack=None으로 표시 (transition에서 buffer_wips 제거 처리)
     for wip_id in state.buffer_wips:
         if wip_id in state.K_mach:
@@ -406,7 +392,7 @@ def _compat_p4(
 
 def _same_spec(wip1: WIPData, wip2: WIPData) -> bool:
     """
-    두 WIP의 규격 동일 여부 (Phase 5 기준)
+    두 WIP의 규격 동일 여부 (기준)
     동일 grade + 두께(±0.1mm) 만 체크.
     가로/세로(단변·장변)는 설비 Capa 체크(_try_add_picking의 cap_short/cap_long)로 처리.
     """
@@ -429,9 +415,7 @@ def _matches_job_template(wip: WIPData, job: JobData) -> bool:
     return True
 
 
-# ─────────────────────────────────────────────────────────────────
 # 내부: START_PROCESS 후보 생성
-# ─────────────────────────────────────────────────────────────────
 
 def _add_start_process_actions(
     state:    State,
@@ -440,7 +424,7 @@ def _add_start_process_actions(
 ) -> None:
     """
     START_PROCESS(q) 후보를 out에 추가한다.
-    조건 (Section 7.6):
+    조건 :
       - m_t = LOADING
       - K_mach ≠ ∅
       - q = j_mach
@@ -455,9 +439,7 @@ def _add_start_process_actions(
         ))
 
 
-# ─────────────────────────────────────────────────────────────────
 # 내부: STORE 후보 생성
-# ─────────────────────────────────────────────────────────────────
 
 def _add_store_actions(
     state: State,
@@ -490,9 +472,7 @@ def _add_store_actions(
         ))
 
 
-# ─────────────────────────────────────────────────────────────────
 # 내부: DIRECT_START 후보 생성 (원자재 job 전용)
-# ─────────────────────────────────────────────────────────────────
 
 def _add_direct_start_actions(
     state:    State,

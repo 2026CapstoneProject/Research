@@ -9,7 +9,7 @@ Greedy 정책 (DIDPPy 미설치 시 fallback)
   5. BUSY 상태:
      5a. 필요 WIP을 가로막는 blocker가 있으면 TEMP_MOVE (버퍼 여유 있을 때)
      5b. blocker가 있으면 MOVE (영구 재배치)
-     5c. 버퍼에 다음 job input_wip이 있으면 PRE_POSITION (Phase 3 신규)
+     5c. 버퍼에 다음 job input_wip이 있으면 PRE_POSITION (신규)
          → RESTORE보다 먼저, 전략적 스택에 선배치
      5d. 버퍼에 WIP이 있으면 RESTORE (방어적 버퍼 복원)
      5e. 그 외 → WAIT
@@ -45,13 +45,13 @@ def greedy_policy(
 
     phase = state.phase
 
-    #  우선순위 1: BLOCKED → STORE 
+    #  우선순위 1: BLOCKED → STORE
     if phase == MachinePhase.BLOCKED:
         stores = [a for a in feasible if a.crane.type == CRANE_STORE]
         if stores:
             return stores[0]
 
-    #  우선순위 1.5: EMPTY + 모든 job 완료 + 버퍼 잔류 → cleanup RESTORE 
+    #  우선순위 1.5: EMPTY + 모든 job 완료 + 버퍼 잔류 → cleanup RESTORE
     # 주의: Q_rem > 0이면 LOAD를 먼저 해야 하므로 이 조건이 필수.
     #       그렇지 않으면 PICKING 가능한 상황에서도 불필요한 RESTORE를 먼저 실행해 버림.
     if phase == MachinePhase.EMPTY and len(state.buffer_wips) > 0 and len(state.Q_rem) == 0:
@@ -59,7 +59,7 @@ def greedy_policy(
         if restore is not None:
             return restore
 
-    #  우선순위 2: LOADING + batch 꽉 참 → START_PROCESS 
+    #  우선순위 2: LOADING + batch 꽉 참 → START_PROCESS
     if phase == MachinePhase.LOADING and state.j_mach is not None:
         q = state.j_mach
         job = job_data.get(q)
@@ -68,7 +68,7 @@ def greedy_policy(
             if starts:
                 return starts[0]
 
-    #  우선순위 3: PICKING 탐색 
+    #  우선순위 3: PICKING 탐색
     # EMPTY에서도 "어떤 WIP + 어떤 job 조합으로 시작할지" 점수화한다.
     pickings = [a for a in feasible if a.crane.type == CRANE_PICKING]
     if pickings:
@@ -85,13 +85,13 @@ def greedy_policy(
             return 10.0 * short_fill + 6.0 * long_fill
         return max(pickings, key=picking_score)
 
-    #  우선순위 4: START_PROCESS 
+    #  우선순위 4: START_PROCESS
     if phase == MachinePhase.LOADING and len(state.K_mach) >= 1:
         starts = [a for a in feasible if a.prod.type == PROD_START]
         if starts:
             return starts[0]
 
-    #  우선순위 4.5: EMPTY + PICKING 없음 → DIRECT_START 또는 idle marshalling 
+    #  우선순위 4.5: EMPTY + PICKING 없음 → DIRECT_START 또는 idle marshalling
     if phase == MachinePhase.EMPTY and not pickings:
         # 4.5a: 원자재 job DIRECT_START (야드 조작 불필요)
         direct_starts = [a for a in feasible if a.prod.type == PROD_DIRECT_START]
@@ -108,13 +108,13 @@ def greedy_policy(
         if idle_move is not None:
             return idle_move
 
-    #  우선순위 5: BUSY 중 pre-marshalling 
+    #  우선순위 5: BUSY 중 pre-marshalling
     if phase == MachinePhase.BUSY:
         move_action = _best_marshalling_action(state, wip_data, job_data, feasible)
         if move_action is not None:
             return move_action
 
-    #  우선순위 6: WAIT 
+    #  우선순위 6: WAIT
     waits = [a for a in feasible if a.crane.type == CRANE_WAIT]
     return waits[0] if waits else feasible[0]
 
@@ -170,7 +170,7 @@ def _best_marshalling_action(
     우선순위:
       1. TEMP_MOVE — blocker를 버퍼로 임시 이동 (가장 빠른 차단 해소)
       2. MOVE      — blocker를 다른 스택으로 영구 이동
-      3. PRE_POSITION (Phase 3 신규)
+      3. PRE_POSITION (신규)
                    — 버퍼의 needed_wip을 최적 스택에 선배치
                      (RESTORE보다 먼저: 전략적 위치 선점)
       4. RESTORE   — 버퍼 WIP 범용 복원 (방어적)
@@ -185,7 +185,7 @@ def _best_marshalling_action(
         if job and job.input_wip_id > 0:
             needed_wips.add(job.input_wip_id)
 
-    #  1. blocker 탐색 (TEMP_MOVE / MOVE) 
+    #  1. blocker 탐색 (TEMP_MOVE / MOVE)
     # 가장 빨리 unblock 가능한 needed WIP의 blocker만 선택
     blockers_to_move: Set[int] = _select_target_blockers(needed_wips, state.stacks)
 
@@ -214,7 +214,7 @@ def _best_marshalling_action(
             return (has_needed, len(state.stacks.get(dst_sid, [])))
         return min(moves, key=_move_score)
 
-    #  2. PRE_POSITION — 버퍼의 needed_wip 전략 선배치 
+    #  2. PRE_POSITION — 버퍼의 needed_wip 전략 선배치
     pre_pos = [
         a for a in feasible
         if a.crane.type == CRANE_PRE_POSITION
@@ -226,7 +226,7 @@ def _best_marshalling_action(
             return len(state.stacks.get(a.crane.dst_stack, []))
         return min(pre_pos, key=pre_score)
 
-    #  3. RESTORE — 방어적 버퍼 복원 
+    #  3. RESTORE — 방어적 버퍼 복원
     # 버퍼가 꽉 찼거나, 남은 job이 없을 때만 RESTORE를 적극 수행한다.
     # 그렇지 않으면 불필요한 복원으로 future blocker를 다시 만들 수 있어 WAIT이 낫다.
     if state.buffer_cap == 0 or len(state.Q_rem) == 0:

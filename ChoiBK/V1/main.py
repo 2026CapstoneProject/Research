@@ -12,7 +12,7 @@
   python main.py --verbose               # 상세 로그
   python main.py --demo-filter           # accessible job 기반 데모 subset 사용
   python main.py --buffer-cap 3          # 버퍼 용량 설정 (기본: 3)
-  python main.py --no-move               # MOVE/TEMP_MOVE 비활성화 (Phase 1 모드)
+  python main.py --no-move               # MOVE/TEMP_MOVE 비활성화
 """
 
 import argparse
@@ -155,7 +155,7 @@ def parse_args():
     )
     parser.add_argument(
         "--no-move", action="store_true",
-        help="MOVE/TEMP_MOVE 비활성화 (Phase 1 동작 재현용)"
+        help="MOVE/TEMP_MOVE 비활성화 (동작 재현용)"
     )
     parser.add_argument(
         "--output", type=str, default=None,
@@ -183,12 +183,12 @@ def parse_args():
 def main():
     args = parse_args()
 
-    #  데이터 로드 
+    #  데이터 로드
     print(f"데이터 로드 중: {os.path.abspath(DATA_DIR)}")
     wip_data, job_data, inter_times, machine_times = load_all(DATA_DIR)
     print(f"  WIP 수: {len(wip_data)} | Job 수 (전체): {len(job_data)}")
 
-    #  Job 선택 
+    #  Job 선택
     if args.job_ids is not None:
         # 직접 지정
         job_data = {jid: job_data[jid] for jid in args.job_ids
@@ -207,7 +207,7 @@ def main():
         print("사용 가능한 run이 없습니다.")
         return
 
-    #  Job 정보 출력 
+    #  Job 정보 출력
     print("\n사용할 Job 목록:")
     for jid, job in sorted(job_data.items()):
         wip = wip_data.get(job.input_wip_id)
@@ -217,21 +217,21 @@ def main():
               f"ptime={job.process_time:5.1f}분 | "
               f"C_s={job.cap_short:.0f} C_l={job.cap_long:.0f}")
 
-    #  확률적 생산시간 활성화 
+    #  확률적 생산시간 활성화
     if getattr(args, 'stochastic', False):
         set_stochastic(True)
         print(f"\n확률적 생산시간 활성화 (SIGMA_PTIME={SIGMA_PTIME}분)")
     else:
         set_stochastic(False)
 
-    #  Phase 2: MOVE/TEMP_MOVE 비활성화 옵션 처리 
+    #  Phase 2: MOVE/TEMP_MOVE 비활성화 옵션 처리
     if hasattr(args, 'no_move') and args.no_move:
-        print("\n⚠️  --no-move: MOVE/TEMP_MOVE 비활성화 (Phase 1 모드)")
+        print("\n⚠️  --no-move: MOVE/TEMP_MOVE 비활성화")
         # feasibility 모듈을 monkey-patch하여 marshalling 비활성화
         import env.feasibility as _feas
         _feas._add_marshalling_actions = lambda *a, **k: None
 
-    #  초기 상태 생성 
+    #  초기 상태 생성
     buf_cap = getattr(args, 'buffer_cap', 3)
     initial_state = build_initial_state(wip_data, job_data, buffer_cap=buf_cap)
     print(f"  버퍼 용량: {buf_cap} 슬롯")
@@ -276,7 +276,7 @@ def main():
                 verbose=args.verbose,
             )
 
-    #  출력 파일 경로 결정 
+    #  출력 파일 경로 결정
     output_path = None
     if not getattr(args, "no_save", False):
         if getattr(args, "output", None):

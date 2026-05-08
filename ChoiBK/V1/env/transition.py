@@ -29,9 +29,7 @@ def set_stochastic(enabled: bool) -> None:
     _stochastic_mode = enabled
 
 
-# ─────────────────────────────────────────────────────────────────
 # 크레인 행동별 소요시간 τ(x_t^crane)
-# ─────────────────────────────────────────────────────────────────
 
 def get_tau(
     crane: CraneAction,
@@ -41,7 +39,7 @@ def get_tau(
 ) -> float:
     """
     크레인 행동 소요시간 τ(x_t^crane) 계산 (분)
-    V5_SDAM Section 6.4: c_{t+1} = c_t + τ(x_t^crane)
+    c_{t+1} = c_t + τ(x_t^crane)
     τ(WAIT) = DELTA_MIN > 0 (무한루프 방지)
     """
     ctype = crane.type
@@ -91,9 +89,7 @@ def get_tau(
     return DELTA_MIN
 
 
-# ─────────────────────────────────────────────────────────────────
 # 크레인 위치 갱신
-# ─────────────────────────────────────────────────────────────────
 
 def _new_crane_loc(crane: CraneAction, old_loc: str) -> str:
     """행동 후 크레인이 있을 노드 이름"""
@@ -114,9 +110,7 @@ def _new_crane_loc(crane: CraneAction, old_loc: str) -> str:
     return old_loc   # WAIT
 
 
-# ─────────────────────────────────────────────────────────────────
 # 메인 전이 함수
-# ─────────────────────────────────────────────────────────────────
 
 def transition(
     state: State,
@@ -135,16 +129,12 @@ def transition(
     prod  = action.prod
     tau   = get_tau(crane, state, inter_times, machine_times)
 
-    # ── (1) 설비 상태 전이 ────────────────────────────
     _update_machine(s, crane, prod, tau, wip_data, job_data)
 
-    # ── (2) 야드 상태 전이 ────────────────────────────
     _update_yard(s, crane)
 
-    # ── (3) 크레인 위치 갱신 ──────────────────────────
     s.crane_loc = _new_crane_loc(crane, state.crane_loc)
 
-    # ── (4) 시간 전이 (Section 6.4) ───────────────────
     s.clock += tau
     # rem_shift, is_unm은 clock으로부터 즉시 계산 가능하므로 별도 저장 안 함
 
@@ -152,9 +142,7 @@ def transition(
     return s
 
 
-# ─────────────────────────────────────────────────────────────────
-# 내부: 설비 상태 전이 (Section 6.3)
-# ─────────────────────────────────────────────────────────────────
+# 내부: 설비 상태 전이
 
 def _update_machine(
     s: State,
@@ -169,7 +157,6 @@ def _update_machine(
     """
     m = s   # 직접 수정
 
-    # ── BUSY → 생산 완료 체크 ──────────
     if m.phase == MachinePhase.BUSY:
         new_eta = max(0.0, m.eta - tau)
         m.eta = new_eta
@@ -192,7 +179,6 @@ def _update_machine(
                 m.j_mach = None
         return   # BUSY 상태에서는 아래 로직 실행 안 함
 
-    # ── PICKING 처리 ─────────────────
     if crane.type == CRANE_PICKING:
         k    = crane.wip_id
         q    = crane.job_id
@@ -211,24 +197,22 @@ def _update_machine(
             m.K_mach  = m.K_mach | {k}
             m.u_short = m.u_short + wip.short_side
             m.u_long  = max(m.u_long, wip.long_side)
-            # j_mach 유지 (Section 7.5: q == j_mach 보장됨)
+            # j_mach 유지 (: q == j_mach 보장됨)
 
         return
 
-    # ── START_PROCESS 처리 ────────────
     if prod.type == PROD_START and m.phase == MachinePhase.LOADING:
         q = prod.job_id
         job = job_data[q]
         m.phase = MachinePhase.BUSY
         ptime = job.process_time   # p_{q_t^mach}
-        # 확률적 생산시간: ω_{t+1}^ptime ~ N(0, σ) (SDAM Section 3.2)
+        # 확률적 생산시간: ω_{t+1}^ptime ~ N(0, σ) (SDAM )
         if _stochastic_mode and SIGMA_PTIME > 0.0:
             noise = np.random.normal(0.0, SIGMA_PTIME)
             ptime = max(DELTA_MIN, ptime + noise)
         m.eta = ptime
         return
 
-    # ── DIRECT_START 처리 (원자재 job: EMPTY → BUSY 직접 전이) ──
     # 크레인 PICKING 없이 바로 가공 시작. K_mach는 비워두고 cap 값으로 설정.
     if prod.type == PROD_DIRECT_START and m.phase == MachinePhase.EMPTY:
         q   = prod.job_id
@@ -245,7 +229,6 @@ def _update_machine(
         m.eta = ptime
         return
 
-    # ── STORE 처리 ──────────────────────────────
     if crane.type == CRANE_STORE and m.phase == MachinePhase.BLOCKED:
         k = crane.wip_id
         m.O_wait = m.O_wait - {k}
@@ -255,12 +238,8 @@ def _update_machine(
             m.j_mach = None
         return   # BLOCKED 상태의 STORE는 여기서 끝
 
-    # ── otherwise: 상태 유지 (LOADING 유지·BLOCKED 대기) ──────
 
-
-# ─────────────────────────────────────────────────────────────────
 # 내부: 야드 상태 전이
-# ─────────────────────────────────────────────────────────────────
 
 def _update_yard(s: State, crane: CraneAction) -> None:
     """

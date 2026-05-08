@@ -1,7 +1,4 @@
-"""
-V5 Phase5 상태 클래스
-V5_SDAM.md Section 3 참조: S_t = (R_t, I_t, B_t)
-"""
+"""상태 클래스"""
 
 import copy
 from dataclasses import dataclass, field
@@ -28,16 +25,13 @@ class State:
     """
     전체 상태 S_t
 
-    ─ R_t^yard ──────────────────────────────────────────
     stacks     : {stack_id → [wip_id_bottom … wip_id_top]}
                  level 1이 바닥, index -1이 최상단 (LIFO)
     crane_loc  : 크레인 현재 위치 노드명 (예: "A-1")
 
-    ─ R_t^buffer ────────────────────────────────────────
     buffer_wips: 버퍼에 있는 WIP ID 집합
     buffer_cap : 잔여 버퍼 용량
 
-    ─ R_t^machine ───────────────────────────────────────
     phase      : MachinePhase
     K_mach     : 현재 설비 위 WIP ID 집합 (FrozenSet)
     j_mach     : 현재 목표 job ID (None if EMPTY)
@@ -46,23 +40,18 @@ class State:
     eta        : 잔여 가공시간 (분)
     O_wait     : 완료 후 미적재 출력재 ID 집합
 
-    ─ I_t^time ──────────────────────────────────────────
     clock      : wall-clock 시간 (분)
 
-    ─ I_t^jobs ──────────────────────────────────────────
     Q_rem      : 미시작 job ID 집합
     Q_done     : 완료된 job ID 집합
     """
 
-    # ── 야드 상태 ──────────────────────────────────────
     stacks:     Dict[int, List[int]]   # {stack_id → [wip_id, ...]}
     crane_loc:  str                    # 현재 크레인 위치 노드명
 
-    # ── 버퍼 상태 ──────────────────────────────────────
     buffer_wips: FrozenSet[int]
     buffer_cap:  int
 
-    # ── 설비 상태 ──────────────────────────────────────
     phase:    MachinePhase
     K_mach:   FrozenSet[int]
     j_mach:   Optional[int]
@@ -71,19 +60,14 @@ class State:
     eta:      float
     O_wait:   FrozenSet[int]
 
-    # ── 시간 상태 ──────────────────────────────────────
     clock:    float                    # 누적 시간 (분)
 
-    # ── job 상태 ───────────────────────────────────────
     Q_rem:    FrozenSet[int]
     Q_done:   FrozenSet[int]
 
-    # ── 에피소드 카운터 ─────────────────────────────────
     step:     int = 0
 
-    # ─────────────────────────────────────────────────
     # 편의 메서드
-    # ─────────────────────────────────────────────────
 
     def top_wip_of(self, stack_id: int) -> Optional[int]:
         """stack_id 스택의 최상단 WIP ID를 반환 (없으면 None)"""
@@ -148,9 +132,7 @@ class State:
         return "\n".join(lines)
 
 
-# ─────────────────────────────────────────────────────────────────
 # 초기 상태 생성 헬퍼
-# ─────────────────────────────────────────────────────────────────
 
 def build_initial_state(
     wip_data: dict,

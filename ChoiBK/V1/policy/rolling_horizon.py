@@ -46,7 +46,7 @@ def rolling_horizon_policy(
         action = greedy_policy(state, wip_data, job_data)
         return action, float("inf")
 
-    #  DIDPPy 모델 빌드 
+    #  DIDPPy 모델 빌드
     active_job_ids = sorted(state.Q_rem)
     # extract_first_action()가 model_builder와 동일한 WIP 인덱스 순서를
     # 사용해야 LOAD_{wi}_{ri} → 실제 WIP ID 매핑이 어긋나지 않는다.
@@ -62,7 +62,7 @@ def rolling_horizon_policy(
         action = greedy_policy(state, wip_data, job_data)
         return action, float("inf")
 
-    #  DIDPPy 풀기 
+    #  DIDPPy 풀기
     result = solve(model, time_limit=time_limit, solver=solver_name)
 
     if not result.success or not result.transitions:
@@ -71,7 +71,7 @@ def rolling_horizon_policy(
         action = greedy_policy(state, wip_data, job_data)
         return action, float("inf")
 
-    #  첫 번째 전이 → Action 변환 
+    #  첫 번째 전이 → Action 변환
     active_job_ids_list  = sorted(state.Q_rem)
     active_wip_ids_list  = active_wip_ids
 

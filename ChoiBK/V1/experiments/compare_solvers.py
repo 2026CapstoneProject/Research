@@ -1,12 +1,11 @@
 """
-V5 Phase3 솔버 비교 실험
+솔버 비교 실험
 experiments/compare_solvers.py
 
 동일한 시나리오에 대해 greedy / CABS / CAASDy 정책을 각각 실행하고
 누적 비용, 완료 job 수, 실행시간, 주요 액션 카운트를 비교 테이블로 출력한다.
 
 사용법:
-  cd Algorithm/V5/Phase3
   python experiments/compare_solvers.py
   python experiments/compare_solvers.py --job-ids 3 35 26
   python experiments/compare_solvers.py --horizon 15 --time-limit 5.0
@@ -20,9 +19,9 @@ import time
 from datetime import datetime
 from typing import Dict, List, Optional
 
-# Phase3 루트를 import 경로에 추가
-_PHASE3_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, _PHASE3_ROOT)
+# 루트를 import 경로에 추가
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
 
 from data.loader import load_all, WIPData, JobData
 from data.params import DEFAULT_HORIZON, DEFAULT_TIME_LIM
@@ -35,8 +34,7 @@ from simulation.simulator import run_episode
 from didp.solver import is_available
 
 
-# ── 데이터 경로 ────────────────────────────────────────────────────
-DATA_DIR = os.path.join(_PHASE3_ROOT, "..", "..", "V1", "input_data_v2")
+DATA_DIR = os.path.join(_ROOT, "..", "..", "V1", "input_data_v2")
 
 
 def _select_accessible_runs(
@@ -245,7 +243,7 @@ def save_comparison(
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="V5 Phase3 솔버 비교 실험")
+    p = argparse.ArgumentParser(description="솔버 비교 실험")
     p.add_argument("--job-ids", type=int, nargs="+", default=None)
     p.add_argument("--depth",   type=int, default=3)
     p.add_argument("--horizon", type=int, default=DEFAULT_HORIZON)
@@ -266,7 +264,6 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # ── 데이터 로드 ──────────────────────────────────────────────
     print(f"데이터 로드 중: {os.path.abspath(DATA_DIR)}")
     wip_data, job_data, inter_times, machine_times = load_all(DATA_DIR)
 
@@ -281,12 +278,10 @@ def main():
         print("사용 가능한 run이 없습니다.")
         return
 
-    # ── 확률적 모드 ──────────────────────────────────────────────
     if args.stochastic:
         set_stochastic(True)
         print("확률적 생산시간 모드 활성화")
 
-    # ── DIDPPy 가용 여부 확인 ────────────────────────────────────
     didp_ok = is_available()
     if not didp_ok:
         print("⚠️  DIDPPy 미설치 — RH 정책 제외하고 greedy만 실행합니다.")
@@ -298,7 +293,6 @@ def main():
             continue
         policies.append(p)
 
-    # ── 실험 실행 ────────────────────────────────────────────────
     results = []
     for policy_name in policies:
         print(f"\n[{policy_name}] 실행 중...", end=" ", flush=True)
@@ -322,22 +316,19 @@ def main():
         print("실행된 정책이 없습니다.")
         return
 
-    # ── 결과 출력 ────────────────────────────────────────────────
     print("\n" + "=" * 70)
     print("솔버 비교 결과")
     print("=" * 70)
     print(_fmt_table_txt(results))
     print("=" * 70)
 
-    # ── 최적 정책 추출 ────────────────────────────────────────────
     best = min(results, key=lambda r: r["total_cost"])
     print(f"\n최저 비용 정책: [{best['policy']}]  총비용={best['total_cost']:.1f}")
 
-    # ── 파일 저장 ────────────────────────────────────────────────
     output_path = args.output
     if output_path is None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        exp_dir = os.path.join(_PHASE3_ROOT, "experiments")
+        exp_dir = os.path.join(_ROOT, "experiments")
         output_path = os.path.join(exp_dir, f"compare_{ts}.md")
 
     save_comparison(output_path, results, job_data, args.horizon, args.time_limit)

@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# 실험 결과
+results/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/

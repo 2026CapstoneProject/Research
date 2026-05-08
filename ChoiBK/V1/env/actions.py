@@ -6,7 +6,7 @@
   MOVE(k, src_stack, dst_stack)     — WIP k를 영구 재배치
   TEMP_MOVE(k, src_stack)           — WIP k를 버퍼로 임시 이동
   RESTORE(k, dst_stack)             — 버퍼 WIP k 범용 복원 (방어적)
-  PRE_POSITION(k, dst_stack)        — 버퍼 WIP k를 미래 PICKING 최적 위치로 선배치 (공격적, Phase 3 신규)
+  PRE_POSITION(k, dst_stack)        — 버퍼 WIP k를 미래 PICKING 최적 위치로 선배치 (공격적, 신규)
                                         조건: k가 Q_rem 중 어떤 run의 input_wip일 때만 허용
                                         전략: WIP 수가 가장 적은 스택(= 최상단 노출 보장) 선택
   WAIT                              — 이번 스텝 크레인 대기
@@ -27,16 +27,14 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-# ── 크레인 행동 타입 상수 ────────────────────────────────
 CRANE_PICKING         = "PICKING"
 CRANE_STORE        = "STORE"
 CRANE_MOVE         = "MOVE"
 CRANE_TEMP_MOVE    = "TEMP_MOVE"
 CRANE_RESTORE      = "RESTORE"
-CRANE_PRE_POSITION = "PRE_POSITION" 
+CRANE_PRE_POSITION = "PRE_POSITION"
 CRANE_WAIT         = "WAIT"
 
-# ── 생산 행동 타입 상수 ──────────────────────────────────
 PROD_START        = "START_PROCESS"
 PROD_DIRECT_START = "DIRECT_START"   # 원자재 job: 야드에 적재 X. 바로 생산 시작한다고 가정
 PROD_CONTINUE     = "CONTINUE"
@@ -84,6 +82,5 @@ class Action:
         return f"[{self.crane} | {self.prod}]"
 
 
-# ── 자주 쓰는 WAIT 행동 ──────────────────────────────────
 WAIT_NONE     = Action(CraneAction(CRANE_WAIT), ProdAction(PROD_NONE))
 WAIT_CONTINUE = Action(CraneAction(CRANE_WAIT), ProdAction(PROD_CONTINUE))

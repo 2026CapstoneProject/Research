@@ -40,15 +40,12 @@ def step_cost(
     prod  = action.prod
     cost  = 0.0
 
-    # ── Δ_t^rel: 영구 재배치 페널티 ───────────
     if crane.type == CRANE_MOVE:
         cost += C_REL
 
-    # ── Δ_t^temp: 임시 이동 페널티 ────────────
     if crane.type == CRANE_TEMP_MOVE:
         cost += C_TEMP
 
-    # ── Δ_t^fill: 설비 적재율 보상 ────────────
     if prod.type == PROD_START and state.j_mach is not None:
         q = state.j_mach
         job = job_data.get(q)
@@ -59,14 +56,12 @@ def step_cost(
             )
             cost -= R_FILL * fill_util   # 보상 → 음수
 
-    # ── DIRECT_START fill 보상 (원자재 run은 cap 전체 사용으로 간주) ──
     if prod.type == PROD_DIRECT_START:
         job = job_data.get(prod.job_id)
         if job is not None:
             # 원자재는 배치 정원을 채운 것으로 처리 → fill_util = 1.0
             cost -= R_FILL * 1.0   # 보상 → 음수
 
-    # ── Δ_t^unm: 무인가공 구간 overlap 보상 ───
     if state.phase == MachinePhase.BUSY:
         t_start = state.clock
         t_end   = state.clock + tau
