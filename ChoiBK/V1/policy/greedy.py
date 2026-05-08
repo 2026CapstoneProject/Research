@@ -45,13 +45,13 @@ def greedy_policy(
 
     phase = state.phase
 
-    # 우선순위 1: BLOCKED → STORE 
+    #  우선순위 1: BLOCKED → STORE 
     if phase == MachinePhase.BLOCKED:
         stores = [a for a in feasible if a.crane.type == CRANE_STORE]
         if stores:
             return stores[0]
 
-    # ── 우선순위 1.5: EMPTY + 모든 job 완료 + 버퍼 잔류 → cleanup RESTORE ───
+    #  우선순위 1.5: EMPTY + 모든 job 완료 + 버퍼 잔류 → cleanup RESTORE 
     # 주의: Q_rem > 0이면 LOAD를 먼저 해야 하므로 이 조건이 필수.
     #       그렇지 않으면 PICKING 가능한 상황에서도 불필요한 RESTORE를 먼저 실행해 버림.
     if phase == MachinePhase.EMPTY and len(state.buffer_wips) > 0 and len(state.Q_rem) == 0:
@@ -85,13 +85,13 @@ def greedy_policy(
             return 10.0 * short_fill + 6.0 * long_fill
         return max(pickings, key=picking_score)
 
-    #  우선순위 4: START_PROCESS
+    #  우선순위 4: START_PROCESS 
     if phase == MachinePhase.LOADING and len(state.K_mach) >= 1:
         starts = [a for a in feasible if a.prod.type == PROD_START]
         if starts:
             return starts[0]
 
-    #  우선순위 4.5: EMPTY + PICKING 없음 → DIRECT_START 또는 idle marshalling
+    #  우선순위 4.5: EMPTY + PICKING 없음 → DIRECT_START 또는 idle marshalling 
     if phase == MachinePhase.EMPTY and not pickings:
         # 4.5a: 원자재 job DIRECT_START (야드 조작 불필요)
         direct_starts = [a for a in feasible if a.prod.type == PROD_DIRECT_START]
@@ -119,6 +119,45 @@ def greedy_policy(
     return waits[0] if waits else feasible[0]
 
 
+def _count_blockers_above(wip_id: int, stacks: dict) -> int:
+    """스택에서 wip_id 위에 쌓인 WIP 수 반환. 없으면 999(접근 불가)."""
+    for sid, stack in stacks.items():
+        for pos in range(len(stack) - 1, -1, -1):
+            if stack[pos] == wip_id:
+                return len(stack) - 1 - pos
+    return 999  # 버퍼에 있거나 이미 픽킹된 경우
+
+
+def _select_target_blockers(
+    needed_wips: Set[int],
+    stacks: dict,
+) -> Set[int]:
+    """
+    needed_wip 중 현재 스택에서 blocker 수가 가장 적은 WIP을 선택,
+    그 WIP 위에 있는 blocker 집합만 반환한다.
+
+    → 가장 빨리 unblock 가능한 job에 집중 굴착 (unguided digging 방지).
+    """
+    best_wip_id: Optional[int] = None
+    best_count = 999
+
+    for wid in needed_wips:
+        cnt = _count_blockers_above(wid, stacks)
+        if 0 < cnt < best_count:   # cnt==0이면 이미 accessible → PICKING이 처리
+            best_count = cnt
+            best_wip_id = wid
+
+    if best_wip_id is None:
+        return set()
+
+    # best_wip_id 위에 있는 WIP만 blocker로 수집
+    for sid, stack in stacks.items():
+        for pos in range(len(stack) - 1, -1, -1):
+            if stack[pos] == best_wip_id:
+                return set(stack[pos + 1:])
+    return set()
+
+
 def _best_marshalling_action(
     state:    State,
     wip_data: Dict[int, WIPData],
@@ -135,6 +174,9 @@ def _best_marshalling_action(
                    — 버퍼의 needed_wip을 최적 스택에 선배치
                      (RESTORE보다 먼저: 전략적 위치 선점)
       4. RESTORE   — 버퍼 WIP 범용 복원 (방어적)
+
+    개선: 모든 needed WIP 블로커를 합집합 처리하지 않고,
+         blocker 수가 가장 적은 needed WIP에 집중 굴착한다.
     """
     # 다음에 필요한 WIP 집합
     needed_wips: Set[int] = set()
@@ -143,16 +185,9 @@ def _best_marshalling_action(
         if job and job.input_wip_id > 0:
             needed_wips.add(job.input_wip_id)
 
-    # 1. blocker 탐색 (TEMP_MOVE / MOVE)
-    blockers_to_move: Set[int] = set()
-    if needed_wips:
-        for sid, stack in state.stacks.items():
-            for pos in range(len(stack) - 1, -1, -1):
-                wid = stack[pos]
-                if wid in needed_wips:
-                    for above_pos in range(pos + 1, len(stack)):
-                        blockers_to_move.add(stack[above_pos])
-                    break
+    #  1. blocker 탐색 (TEMP_MOVE / MOVE) 
+    # 가장 빨리 unblock 가능한 needed WIP의 blocker만 선택
+    blockers_to_move: Set[int] = _select_target_blockers(needed_wips, state.stacks)
 
     # TEMP_MOVE 우선 (버퍼 여유 있을 때)
     temp_moves = [
@@ -163,16 +198,23 @@ def _best_marshalling_action(
     if temp_moves:
         return temp_moves[0]
 
-    # MOVE (영구 재배치)
+    # MOVE (영구 재배치) — needed WIP 없는 스택 우선, 그다음 최소 크기
     moves = [
         a for a in feasible
         if a.crane.type == CRANE_MOVE
         and a.crane.wip_id in blockers_to_move
     ]
     if moves:
-        return moves[0]
+        def _move_score(a: Action) -> Tuple[int, int]:
+            dst_sid = a.crane.dst_stack
+            # 1순위: needed WIP이 없는 스택 (dump해도 새 blocker 안 생김)
+            has_needed = int(any(wid in needed_wips
+                                 for wid in state.stacks.get(dst_sid, [])))
+            # 2순위: 스택 크기 최소
+            return (has_needed, len(state.stacks.get(dst_sid, [])))
+        return min(moves, key=_move_score)
 
-    # 2. PRE_POSITION — 버퍼의 needed_wip 전략 선배치
+    #  2. PRE_POSITION — 버퍼의 needed_wip 전략 선배치 
     pre_pos = [
         a for a in feasible
         if a.crane.type == CRANE_PRE_POSITION
@@ -184,7 +226,7 @@ def _best_marshalling_action(
             return len(state.stacks.get(a.crane.dst_stack, []))
         return min(pre_pos, key=pre_score)
 
-    # 3. RESTORE — 방어적 버퍼 복원
+    #  3. RESTORE — 방어적 버퍼 복원 
     # 버퍼가 꽉 찼거나, 남은 job이 없을 때만 RESTORE를 적극 수행한다.
     # 그렇지 않으면 불필요한 복원으로 future blocker를 다시 만들 수 있어 WAIT이 낫다.
     if state.buffer_cap == 0 or len(state.Q_rem) == 0:
@@ -261,14 +303,8 @@ def _best_idle_marshalling_action(
         if job and job.input_wip_id > 0:
             needed_wips.add(job.input_wip_id)
 
-    blockers: Set[int] = set()
-    for sid, stack in state.stacks.items():
-        for pos in range(len(stack) - 1, -1, -1):
-            wid = stack[pos]
-            if wid in needed_wips:
-                for above_pos in range(pos + 1, len(stack)):
-                    blockers.add(stack[above_pos])
-                break
+    # 가장 빨리 unblock 가능한 needed WIP의 blocker만 집중 굴착
+    blockers: Set[int] = _select_target_blockers(needed_wips, state.stacks)
 
     if not blockers:
         return None
@@ -287,4 +323,11 @@ def _best_idle_marshalling_action(
         if a.crane.type == CRANE_MOVE and a.crane.wip_id in blockers
     ]
     if moves:
-        return min(moves, key=lambda a: len(state.stacks.get(a.crane.dst_stack, [])))
+        def _idle_move_score(a: Action) -> Tuple[int, int]:
+            dst_sid = a.crane.dst_stack
+            # 1순위: needed WIP이 없는 스택 (dump해도 새 blocker 안 생김)
+            has_needed = int(any(wid in needed_wips
+                                 for wid in state.stacks.get(dst_sid, [])))
+            # 2순위: 스택 크기 최소
+            return (has_needed, len(state.stacks.get(dst_sid, [])))
+        return min(moves, key=_idle_move_score)

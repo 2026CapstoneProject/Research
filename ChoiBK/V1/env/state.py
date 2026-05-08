@@ -168,7 +168,9 @@ def build_initial_state(
     from data.loader import WIPData
 
     # stack 구성: level 오름차순 정렬 → index 0=바닥, -1=최상단
-    stacks: Dict[int, List[int]] = {1: [], 2: [], 3: [], 4: []}
+    # STACK_TO_NODE 키로 동적 생성 → 스택 수 변경 시 여기만 자동 반영
+    from data.params import STACK_TO_NODE
+    stacks: Dict[int, List[int]] = {sid: [] for sid in STACK_TO_NODE}
     for wip in wip_data.values():
         if wip.stack_id not in stacks or wip.level <= 0:
             continue

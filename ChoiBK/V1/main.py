@@ -1,13 +1,10 @@
 """
-V5 Phase5 메인 진입점
-
-Phase 5 핵심 가정:
+가정:
   - 출력 재공품은 다른 생산 run의 입력으로 다시 사용되지 않는다.
-  - production_plan의 후속 연결(output -> input)은 제거된 input_data_v5를 사용한다.
+  - production_plan의 후속 연결(output -> input)은 제거된 input_data를 사용한다.
   - output WIP은 생성·적재되지만, downstream unlock 보너스는 더 이상 없다.
 
 사용법:
-  cd Algorithm/V5/Phase5
   python main.py                         # greedy + 전체 production_plan 사용
   python main.py --policy rh             # Rolling Horizon DLA (DIDPPy 필요)
   python main.py --horizon 10            # horizon 크기 조정
@@ -37,10 +34,10 @@ from simulation.simulator import run_episode, print_summary
 from didp.solver import is_available
 
 
-# ── input_data 경로 (Phase5 전용) ───────────────────────────────
+# input_data 경로
 DATA_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "input_data_v5",
+    "input_data",
 )
 
 
@@ -50,7 +47,7 @@ def select_accessible_runs(
     depth: int = 5,
 ) -> Dict[int, JobData]:
     """
-    Phase 5 demo용 job 후보를 선택한다.
+    Job 후보 선택
 
     규칙:
       - 각 스택의 상단 depth층 안에 있는 job input WIP는 모두 포함한다.
@@ -114,7 +111,8 @@ def select_accessible_runs(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="V5 Phase5 시뮬레이션")
+    parser = argparse.ArgumentParser(description="" \
+    "시뮬레이션")
     parser.add_argument(
         "--policy", choices=["greedy", "rh"], default="greedy",
         help="정책 선택: greedy (기본) | rh (Rolling Horizon DLA)"
@@ -185,12 +183,12 @@ def parse_args():
 def main():
     args = parse_args()
 
-    # ── 데이터 로드 ───────────────────────────────────────────
+    #  데이터 로드 
     print(f"데이터 로드 중: {os.path.abspath(DATA_DIR)}")
     wip_data, job_data, inter_times, machine_times = load_all(DATA_DIR)
     print(f"  WIP 수: {len(wip_data)} | Job 수 (전체): {len(job_data)}")
 
-    # ── Job 선택 ─────────────────────────────────────────────
+    #  Job 선택 
     if args.job_ids is not None:
         # 직접 지정
         job_data = {jid: job_data[jid] for jid in args.job_ids
@@ -209,7 +207,7 @@ def main():
         print("사용 가능한 run이 없습니다.")
         return
 
-    # ── Job 정보 출력 ─────────────────────────────────────────
+    #  Job 정보 출력 
     print("\n사용할 Job 목록:")
     for jid, job in sorted(job_data.items()):
         wip = wip_data.get(job.input_wip_id)
@@ -219,21 +217,21 @@ def main():
               f"ptime={job.process_time:5.1f}분 | "
               f"C_s={job.cap_short:.0f} C_l={job.cap_long:.0f}")
 
-    # ── 확률적 생산시간 활성화 ───────────────────────────────
+    #  확률적 생산시간 활성화 
     if getattr(args, 'stochastic', False):
         set_stochastic(True)
         print(f"\n확률적 생산시간 활성화 (SIGMA_PTIME={SIGMA_PTIME}분)")
     else:
         set_stochastic(False)
 
-    # ── Phase 2: MOVE/TEMP_MOVE 비활성화 옵션 처리 ──────────
+    #  Phase 2: MOVE/TEMP_MOVE 비활성화 옵션 처리 
     if hasattr(args, 'no_move') and args.no_move:
         print("\n⚠️  --no-move: MOVE/TEMP_MOVE 비활성화 (Phase 1 모드)")
         # feasibility 모듈을 monkey-patch하여 marshalling 비활성화
         import env.feasibility as _feas
         _feas._add_marshalling_actions = lambda *a, **k: None
 
-    # ── 초기 상태 생성 ────────────────────────────────────────
+    #  초기 상태 생성 
     buf_cap = getattr(args, 'buffer_cap', 3)
     initial_state = build_initial_state(wip_data, job_data, buffer_cap=buf_cap)
     print(f"  버퍼 용량: {buf_cap} 슬롯")
@@ -251,7 +249,7 @@ def main():
         marker = "◀ job 있음" if sid in needed_stacks else ""
         print(f"  Stack {sid}: {len(stk)}개 WIP | top={top} {marker}")
 
-    # ── 정책 설정 ────────────────────────────────────────────
+    # 정책 설정
     if args.policy == "rh":
         if not is_available():
             print(f"\n⚠️  현재 인터프리터({sys.executable})에서 DIDPPy를 찾지 못했습니다.")
@@ -278,7 +276,7 @@ def main():
                 verbose=args.verbose,
             )
 
-    # ── 출력 파일 경로 결정 ───────────────────────────────────
+    #  출력 파일 경로 결정 
     output_path = None
     if not getattr(args, "no_save", False):
         if getattr(args, "output", None):
@@ -296,8 +294,8 @@ def main():
             )
             output_path = os.path.join(results_dir, f"result_{ts}_{policy_tag}_{run_tag}.md")
 
-    # ── 시뮬레이션 실행 ───────────────────────────────────────
-    print("\n" + "─" * 60)
+    # 시뮬레이션 실행
+    print("\n" + "" * 60)
     log = run_episode(
         initial_state = initial_state,
         wip_data      = wip_data,
@@ -309,7 +307,7 @@ def main():
         output_path   = output_path,
     )
 
-    # ── 결과 출력 ─────────────────────────────────────────────
+    # 결과 출력
     print_summary(log, job_data=job_data)
 
 
